@@ -2,7 +2,7 @@
 
 一个迷你 Agent，人设是「永雏塔菲」。它不只是聊天——能联网搜资料、打开网页读原文，也能在沙箱里读写文件、编译运行代码，写完自己跑一遍验证，跑不通自己改。
 
-算法与数据结构、计算机组成原理、嵌入式系统、单片机（STM32）、物联网这些方向塔菲也懂：仓库里自带了一个本地知识库，问到就会先翻对应的教材 / 题解原文，再照着原文回答并标出处。
+算法与数据结构、计算机组成原理、嵌入式系统、单片机（STM32）、物联网、数字取证这些方向塔菲也懂：仓库里自带了一个本地知识库，问到就会先翻对应的教材 / 题解原文，再照着原文回答并标出处。
 
 两种用法：**终端**里直接对话，或者起一个**网页版**（手机也能用，聊天记录流式输出、思考过程和工具调用可折叠、代码高亮、还会发塔菲表情包）。
 
@@ -70,7 +70,7 @@ pip install openai requests python-dotenv pypdf python-docx jieba rank_bm25 \
 
 ```
 DEEPSEEK_API_KEY=sk-你的key
-CXX=F:\Dev-Cpp\MinGW64\bin\g++.exe
+CXX=g++.exe路径
 ```
 
 没有 key（或没建这个文件）时，程序启动会直接报错提醒，不会静默失败。
@@ -172,11 +172,12 @@ python -m taffy.web
 
 把文档丢进项目根目录的 `knowledge/`（子目录也认），Agent 就能查到。
 
-仓库里已经带了一份知识库（约 105MB），也可以自己再往里加：
+仓库里已经带了一份知识库（约 117MB），也可以自己再往里加：
 
 | 目录 | 内容 |
 |---|---|
 | `books/` | 教材 PDF / Markdown：算法（[Algorithms-JeffE](file:///f:/新建文件夹/Taffy-Agent/knowledge/books/Algorithms-JeffE.pdf)、[CPH](file:///f:/新建文件夹/Taffy-Agent/knowledge/books/CompetitiveProgrammersHandbook.pdf)）、数据结构（[OpenDataStructures C++/Python](file:///f:/新建文件夹/Taffy-Agent/knowledge/books/OpenDataStructures-cpp.pdf)）、[计算机组成原理](file:///f:/新建文件夹/Taffy-Agent/knowledge/books/ComputerOrganization-Tarnoff.pdf)、[嵌入式系统](file:///f:/新建文件夹/Taffy-Agent/knowledge/books/EmbeddedSystems-LeeSeshia.pdf)、[物联网](file:///f:/新建文件夹/Taffy-Agent/knowledge/books/IoT-EnablingThingsToTalk.pdf)、[STM32 单片机](file:///f:/新建文件夹/Taffy-Agent/knowledge/books/Microcontrollers-STM32F103.md) |
+| `books/` 数字取证 | [数字取证教材（UOU）](file:///f:/新建文件夹/Taffy-Agent/knowledge/books/DigitalForensics-UOU.pdf)、[NIST SP 800-86 取证技术融入应急响应](file:///f:/新建文件夹/Taffy-Agent/knowledge/books/NIST-SP800-86-ForensicTechniques.pdf)、[NIST SP 800-101r1 移动设备取证](file:///f:/新建文件夹/Taffy-Agent/knowledge/books/NIST-SP800-101r1-MobileDeviceForensics.pdf)、[NIJ 数字证据检验指南](file:///f:/新建文件夹/Taffy-Agent/knowledge/books/NIJ-ForensicExaminationOfDigitalEvidence.pdf)、论文：[DFRWS 内存取证（Go 恶意样本）](file:///f:/新建文件夹/Taffy-Agent/knowledge/books/DFRWS2026-MemoryForensics-GoMalware.pdf)、[DFRWS Deepfake 取证](file:///f:/新建文件夹/Taffy-Agent/knowledge/books/DFRWS2026-DeepfakePolicing.pdf) |
 | `hello-algo/` | 《Hello 算法》中文教程分章 Markdown |
 | `leetcode/` | LeetCode 题解（按题号分段） |
 | `oi-wiki/` | OI Wiki 各专题 |
@@ -206,8 +207,6 @@ python -m taffy.web
 
 ## 版权声明
 
-**本项目的代码**（`taffy/`、`agent.py` 等）版权归仓库作者所有，未附开源许可证。
-
 **`knowledge/` 下的文档全部是第三方作品**，版权归各自的作者 / 出版社 / 社区所有，不属于本项目，本项目也不对其主张任何权利。收录目的仅为本地检索与个人学习，能不能再分发、能不能商用，一律以原出处和自己的授权为准。
 
 | 资料 | 作者 / 来源 | 授权（据文件内声明或上游仓库） |
@@ -219,6 +218,12 @@ python -m taffy.web
 | `books/EmbeddedSystems-LeeSeshia.pdf` | Lee & Seshia | CC BY-NC-ND 4.0 |
 | `books/IoT-EnablingThingsToTalk.pdf` | Springer，2013 开放获取 | CC BY-NC |
 | `books/Microcontrollers-STM32F103.md` | 野火电子（EmbedFire）官方教程整理 | 版权归野火电子 |
+| `books/DigitalForensics-UOU.pdf` | Jeetendra Pande、Ajay Prasad，Uttarakhand Open University 2016 | CC BY-SA 4.0 |
+| `books/NIST-SP800-86-ForensicTechniques.pdf` | NIST（美国国家标准与技术研究院） | 美国政府作品，公有领域 |
+| `books/NIST-SP800-101r1-MobileDeviceForensics.pdf` | NIST | 美国政府作品，公有领域 |
+| `books/NIJ-ForensicExaminationOfDigitalEvidence.pdf` | 美国司法部 NIJ（NCJ 199408） | 美国政府作品，公有领域 |
+| `books/DFRWS2026-MemoryForensics-GoMalware.pdf` | DFRWS USA 2026，Hala Ali / Andrew Case / Irfan Ahmed | 文件为 Elsevier 投稿预印本，内部未声明许可；DFRWS 官网公开提供 |
+| `books/DFRWS2026-DeepfakePolicing.pdf` | DFRWS EU 2026，Áine MacDermott | CC BY-NC-ND（Elsevier 开放获取） |
 | `hello-algo/` | 靳宇栋（krahets）《Hello 算法》 | CC BY-NC-SA 4.0 |
 | `leetcode/` | doocs/leetcode 社区 | CC BY-SA 4.0；题目本身归 LeetCode |
 | `oi-wiki/` | OI Wiki 社区 | CC BY-SA 4.0（个别页面另有署名） |
@@ -240,7 +245,7 @@ python -m taffy.web
 - 数学式子不许写 LaTeX 源码，用 × ÷ ≤ √ π 这种一眼能读的写法；
 - 情绪优先用表情包图片，别堆 emoji 和颜文字；
 - 拿到链接用 `open_url` 读原文再回答，打不开就直说，不许瞎编；
-- 除了算法题，嵌入式 / 单片机 / 物联网 / 计算机组成原理也答，这几个方向先查知识库教材原文再回；
+- 除了算法题，嵌入式 / 单片机 / 物联网 / 计算机组成原理 / 数字取证也答，这几个方向先查知识库教材原文再回（取证那几本是英文的，提示里让它用英文关键词检索）；
 - 能看图：雏草姬发的图片当轮有效、看完即清，图里的信息要当轮抄进回答，下一轮不许假装还记得。
 
 ## 新增一个工具
