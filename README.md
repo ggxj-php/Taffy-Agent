@@ -170,7 +170,7 @@ python -m taffy.web
 
 把文档丢进项目根目录的 `knowledge/`（子目录也认），Agent 就能查到。
 
-仓库自带的知识库内容（`knowledge/` 已 gitignore，这里列的是运行时放进去的）：
+仓库里已经带了一份知识库（约 105MB），也可以自己再往里加：
 
 | 目录 | 内容 |
 |---|---|
@@ -201,6 +201,32 @@ python -m taffy.web
 - 如果某个文件解析失败（比如加密 PDF），会跳过它继续索引其它文件，不会整个挂掉。
 
 **换成向量检索**：BM25 是关键词匹配，问法和原文用词差太远就搜不到。将来想升级，只需要改 [index.py](file:///f:/新建文件夹/Taffy-Agent/taffy/kb/index.py) 的 `KnowledgeBase.build()` / `search()` 两个方法，工具层和提示词都不用动。
+
+## 版权声明
+
+**本项目的代码**（`taffy/`、`agent.py` 等）版权归仓库作者所有，未附开源许可证。
+
+**`knowledge/` 下的文档全部是第三方作品**，版权归各自的作者 / 出版社 / 社区所有，不属于本项目，本项目也不对其主张任何权利。收录目的仅为本地检索与个人学习，能不能再分发、能不能商用，一律以原出处和自己的授权为准。
+
+| 资料 | 作者 / 来源 | 授权（据文件内声明或上游仓库） |
+|---|---|---|
+| `books/Algorithms-JeffE.pdf` | Jeff Erickson | CC BY 4.0 |
+| `books/CompetitiveProgrammersHandbook.pdf` | Antti Laaksonen（2018-07-03 草稿版，CSES 免费书） | CC BY-NC-SA |
+| `books/OpenDataStructures-*.pdf` | Pat Morin | 书正文版权归作者 / 出版社；配套源码为 CC BY |
+| `books/ComputerOrganization-Tarnoff.pdf` | David L. Tarnoff | **保留所有权利**（All rights reserved） |
+| `books/EmbeddedSystems-LeeSeshia.pdf` | Lee & Seshia | CC BY-NC-ND 4.0 |
+| `books/IoT-EnablingThingsToTalk.pdf` | Springer，2013 开放获取 | CC BY-NC |
+| `books/Microcontrollers-STM32F103.md` | 野火电子（EmbedFire）官方教程整理 | 版权归野火电子 |
+| `hello-algo/` | 靳宇栋（krahets）《Hello 算法》 | CC BY-NC-SA 4.0 |
+| `leetcode/` | doocs/leetcode 社区 | CC BY-SA 4.0；题目本身归 LeetCode |
+| `oi-wiki/` | OI Wiki 社区 | CC BY-SA 4.0（个别页面另有署名） |
+| `luogu/` | 洛谷（luogu.com.cn）题解 | 版权归洛谷及原题解作者 |
+
+注意几点：
+
+- 上表是**各项资料自身的授权**，不是本项目的授权。带 **NC** 的都禁止商用，所以整仓库不能当商用素材用；带 **SA / ND** 的还有「相同方式共享」「禁止演绎」的约束。
+- `ComputerOrganization-Tarnoff.pdf` 书内版权页写的是 All rights reserved，是这里面限制最严的一本，随仓库公开只为方便个人学习检索，请不要再分发。
+- 权利人若认为收录不妥，提 Issue 或联系仓库作者，会立刻移除。
 
 ## 人设提示词
 
