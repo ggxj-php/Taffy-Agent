@@ -34,7 +34,7 @@ Taffy-Agent/
 │       └── static/          # 前端：index.html / app.js / style.css
 │           ├── stickers/    # 22 张塔菲表情包
 │           └── vendor/      # marked / highlight.js / DOMPurify
-├── knowledge/               # 知识库原始文档（已 gitignore），Agent 只读
+├── knowledge/               # 知识库原始文档，Agent 只读（已随仓库提供）
 ├── .cache/                  # 知识库索引缓存，可随时删掉重建
 └── workspace/               # 沙箱根目录，Agent 只能在这里动文件
 ```
