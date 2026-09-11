@@ -112,6 +112,49 @@ function renderMarkdown(text) {
   return DOMPurify.sanitize(marked.parse(demath(text)));
 }
 
+/* 复制文本。手机连局域网 IP 打开时是 http 页面，不是安全上下文，
+   navigator.clipboard 直接不存在，只调它就会「复制失败」。
+   所以先用 execCommand 同步复制（还能保住用户点击的手势），不行再退回异步 API。 */
+async function copyText(text) {
+  const area = document.createElement('textarea');
+  area.value = text;
+  area.readOnly = true;
+  area.contentEditable = 'true';        // iOS Safari 只有这样才能 select()
+  area.style.position = 'fixed';
+  area.style.top = '-1000px';
+  area.style.opacity = '0';
+  document.body.appendChild(area);
+  area.select();
+  area.setSelectionRange(0, text.length);
+  let ok = false;
+  try {
+    ok = document.execCommand('copy');
+  } catch (err) {
+    ok = false;
+  }
+  document.body.removeChild(area);
+  if (ok) return true;
+
+  if (navigator.clipboard) {
+    try {
+      await navigator.clipboard.writeText(text);
+      return true;
+    } catch (err) {
+      return false;
+    }
+  }
+  return false;
+}
+
+/* 复制失败就把代码选中，让雏草姬长按 / 双击手动复制，别干瞪眼 */
+function selectNode(node) {
+  const range = document.createRange();
+  range.selectNodeContents(node);
+  const selection = window.getSelection();
+  selection.removeAllRanges();
+  selection.addRange(range);
+}
+
 function enhance(root) {
   root.querySelectorAll('a[href]').forEach((a) => {
     a.target = '_blank';
@@ -132,13 +175,10 @@ function enhance(root) {
     copy.type = 'button';
     copy.textContent = '复制';
     copy.addEventListener('click', async () => {
-      try {
-        await navigator.clipboard.writeText(code.textContent);
-        copy.textContent = '已复制';
-      } catch (err) {
-        copy.textContent = '复制失败';
-      }
-      setTimeout(() => { copy.textContent = '复制'; }, 1400);
+      const ok = await copyText(code.textContent);
+      copy.textContent = ok ? '已复制' : '已选中，长按复制';
+      if (!ok) selectNode(code);
+      setTimeout(() => { copy.textContent = '复制'; }, 1800);
     });
 
     bar.append(lang, copy);

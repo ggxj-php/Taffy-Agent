@@ -238,9 +238,10 @@ python -m taffy.web
 
 ## 人设提示词
 
-在 [config.py](file:///f:/新建文件夹/Taffy-Agent/taffy/config.py) 的 `SYSTEM_PROMPT`，一共 19 条。除了说话风格，几条硬规矩是：
+在 [config.py](file:///f:/新建文件夹/Taffy-Agent/taffy/config.py) 的 `SYSTEM_PROMPT`，一共 21 条。除了说话风格，几条硬规矩是：
 
 - 代码必须完整写进回答里（workspace 只是缓存，不是交付物），跑通后删掉临时文件；
+- 写代码前先用 `search_knowledge` 搜一遍知识库，有现成的题解 / 模板 / 教材写法就先参考并标出处，实在沾不上边才从零写；
 - 发题解前必须自己跑测试用例验证；
 - 跑代码前自审安全性，代码只准碰 workspace；
 - 数学式子不许写 LaTeX 源码，用 × ÷ ≤ √ π 这种一眼能读的写法；
