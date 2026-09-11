@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#ffb7d5">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<title>永雏塔菲 · Agent</title>
+<link rel="icon" href="/static/avatar.jpg">
+<link rel="stylesheet" href="/static/vendor/highlight.css">
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+
+<header class="topbar">
+  <img class="avatar" src="/static/avatar.jpg" alt="塔菲">
+  <div class="who">
+    <div class="name">永雏塔菲</div>
+    <div class="status" id="status">在线喵</div>
+  </div>
+  <button type="button" id="new-chat" class="new-chat">新会话</button>
+</header>
+
+<main id="messages" class="messages"></main>
+
+<button type="button" id="to-bottom" class="to-bottom" aria-label="回到最底部">
+  <span aria-hidden="true">↓</span>
+</button>
+
+<form id="composer" class="composer">
+  <div class="attach-bar" id="attach-bar" hidden>
+    <div class="attach-item">
+      <img id="attach-preview" alt="待发送的图片">
+      <button type="button" id="attach-remove" class="attach-remove" aria-label="移除图片">×</button>
+    </div>
+  </div>
+  <div class="composer-row">
+    <button type="button" id="pick-image" class="icon-btn" aria-label="发送图片" title="发送图片">🖼</button>
+    <textarea id="input" rows="1" placeholder="和塔菲说点什么喵…" autocomplete="off"></textarea>
+    <button id="send" type="submit" aria-label="发送">发送</button>
+  </div>
+  <input type="file" id="image-input" accept="image/*" hidden>
+</form>
+
+<script src="/static/vendor/marked.min.js"></script>
+<script src="/static/vendor/highlight.min.js"></script>
+<script src="/static/vendor/purify.min.js"></script>
+<script src="/static/app.js"></script>
+</body>
+</html>
