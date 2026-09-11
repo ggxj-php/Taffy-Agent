@@ -70,7 +70,7 @@ pip install openai requests python-dotenv pypdf python-docx jieba rank_bm25 \
 
 ```
 DEEPSEEK_API_KEY=sk-你的key
-CXX=F:\Dev-Cpp\MinGW64\bin\g++.exe
+CXX=g++.exe路径
 ```
 
 没有 key（或没建这个文件）时，程序启动会直接报错提醒，不会静默失败。
