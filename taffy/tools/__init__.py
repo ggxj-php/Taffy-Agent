@@ -4,9 +4,9 @@
 """
 import json
 
-from . import basics, files, kb, runner, search, sticker
+from . import basics, files, forensics, kb, runner, search, sticker
 
-_MODULES = (basics, kb, search, files, runner, sticker)
+_MODULES = (basics, kb, search, files, forensics, runner, sticker)
 
 TOOLS = []
 TOOL_MAP = {}

@@ -28,6 +28,7 @@ Taffy-Agent/
 │   │   ├── files.py         # list_files / read_file / write_file / delete_file
 │   │   ├── runner.py        # run_code
 │   │   ├── sticker.py       # send_sticker
+│   │   ├── forensics.py     # 数字取证：哈希 / 类型识别 / 字符串 / 雕复 / 元数据
 │   │   ├── _pyguard.py      # Python 运行时审计钩子（子进程里跑）
 │   │   └── _codescan.py     # C/C++/Java/JS 跑前静态审查
 │   └── web/                 # 网页版
@@ -246,6 +247,7 @@ python -m taffy.web
 - 情绪优先用表情包图片，别堆 emoji 和颜文字；
 - 拿到链接用 `open_url` 读原文再回答，打不开就直说，不许瞎编；
 - 除了算法题，嵌入式 / 单片机 / 物联网 / 计算机组成原理 / 数字取证也答，这几个方向先查知识库教材原文再回（取证那几本是英文的，提示里让它用英文关键词检索）；
+- 数字取证有专门工具：先 `identify_file` 看是什么、`hash_file` 固定哈希，再按需 `extract_strings` / `carve_files` / `file_metadata` 深挖，结论要带上偏移量 / 哈希 / 时间戳；分析完不许删雏草姬放进来的样本；
 - 能看图：雏草姬发的图片当轮有效、看完即清，图里的信息要当轮抄进回答，下一轮不许假装还记得。
 
 ## 新增一个工具
