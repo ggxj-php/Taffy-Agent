@@ -29,6 +29,12 @@ Taffy-Agent/
 │   │   ├── runner.py        # run_code
 │   │   ├── sticker.py       # send_sticker
 │   │   ├── forensics.py     # 数字取证：哈希 / 类型识别 / 字符串 / 雕复 / 元数据
+│   │   ├── asm_sim.py       # asm_sim：小型 16 位 CPU 模拟器
+│   │   ├── mcu.py           # mcu_calc：单片机外设计算 + 校验
+│   │   ├── logic.py         # logic_sim：数字逻辑仿真（门电路 / 真值表 / D 触发器）
+│   │   ├── numconv.py       # number_convert：进制 / 补码 / IEEE754 / 位运算
+│   │   ├── calc.py          # sci_calc：超高精度科学计算器
+│   │   ├── text.py          # regex_test / diff_text / json_tool：正则 / 差异 / JSON
 │   │   ├── _pyguard.py      # Python 运行时审计钩子（子进程里跑）
 │   │   └── _codescan.py     # C/C++/Java/JS 跑前静态审查
 │   └── web/                 # 网页版
@@ -78,7 +84,16 @@ CXX=g++.exe路径
 
 `CXX` 是可选的，只在 `run_code` 跑 `.cpp` / `.c` 时用到：填 g++ 的绝对路径就行，`.c` 会自动用同目录的 `gcc`。不填就按 PATH 里的 `g++` 找。**不用把它加进系统 PATH**——那样会影响全局，还要重启终端才生效，配在项目里更省事。
 
+`SEARCH_PROXY` 也是可选的，控制 `web_search` 走不走代理，默认**直连**（360 这类国内引擎走代理反而容易被拒）。部署到别的机器上搜不出东西时，先看工具返回的提示，它会写明每家引擎是「连不上」还是「没抠到结果（页面 xx 字节）」：如果各家都连不上，说明是网络出不去，把这项设成 `system`（跟随系统 / 环境变量里的代理）或者直接填地址就行。
+
+```
+SEARCH_PROXY=system                      # 或者
+SEARCH_PROXY=http://127.0.0.1:7897
+```
+
 `-static` 是默认带的，编译出来的临时可执行文件不依赖编译器目录下的 dll。
+
+单次回复最多输出多少 token，在 `taffy/config.py` 里的 `MAX_TOKENS` 调，默认 **2048**。模型不设这个值时官方会一路放到 4096，压一下能省不少钱；2048 对日常问答和中等长度的代码都够，太长了塔菲会分几次写。想上 8K 得把 `BASE_URL` 换成 beta 接口。
 
 ## 运行
 
@@ -125,13 +140,97 @@ python -m taffy.web
 | `get_time` | 当前时间 |
 | `search_knowledge` | 检索本地知识库 `knowledge/`，返回原文片段 |
 | `web_search` | 联网搜索，返回标题 / 链接 / 摘要 |
-| `open_url` | 打开 http/https 链接，抽取网页正文 |
+| `open_url` | 打开 http/https 链接，跟完跳转后抽取网页正文 |
 | `list_files` | 列出 workspace 里的目录 |
 | `read_file` | 读文本文件 |
 | `write_file` | 写文件，父目录自动创建 |
 | `delete_file` | 删文件或目录（删目录要 `recursive=True`） |
 | `run_code` | 编译运行代码，支持 `.py` / `.js` / `.java` / `.cpp` / `.c` |
 | `send_sticker` | 发一张塔菲表情包（网页版渲染成图片） |
+| `hash_file` | 算 MD5 / SHA1 / SHA256，可跟已知哈希比对 |
+| `identify_file` | 按魔数判断真实类型（能揭穿改后缀伪装的），并算熵值 |
+| `extract_strings` | 从二进制里提取 ASCII / UTF-16 / 中文字符串，带偏移量 |
+| `carve_files` | 按文件头尾签名雕复出内嵌 / 被删的图片、PDF、压缩包 |
+| `file_metadata` | MACB 时间线 + PDF / JPEG EXIF 元数据 |
+| `asm_sim` | 在小型 16 位 CPU 上跑汇编，看寄存器 / 标志位 / 内存，可出逐步 trace |
+| `mcu_calc` | 单片机外设计算：波特率、定时器、ADC、分压、PWM、I2C 地址、CRC、RC |
+| `logic_sim` | 数字逻辑仿真：门级网表算输出 / 列真值表，D 触发器按时钟跑周期 |
+| `number_convert` | 进制互转、补码、IEEE754 位型、位运算置位 / 清位 / 测位 |
+| `sci_calc` | 高精度科学计算器：表达式一次算到几十上百位有效数字 |
+| `regex_test` | 正则调试：列出每处匹配的位置 / 内容 / 分组，可做替换 |
+| `diff_text` | 两段文本 / 代码的 unified diff + 新增删除行数 |
+| `json_tool` | JSON 缩进美化 / 压成一行 / 按路径取值 / 校验（错在哪行哪列） |
+
+## 工程计算与教学仿真
+
+这五个工具（`asm_sim` / `mcu_calc` / `logic_sim` / `number_convert` / `sci_calc`）都是纯标准库、纯算术，不联网、不起子进程，跨平台，专门覆盖塔菲会的那几个方向。
+
+**`asm_sim`**——自带的 16 位 CPU。寄存器 `R0`~`R7`，标志位 `Z/N/C`，内存 256 个字（指令和数据共用），数值按 16 位回绕。指令集：
+
+```
+LI Rd,imm      MOV Rd,Rs       LOAD Rd,addr    STORE Rs,addr
+ADD/SUB/MUL/AND/OR/XOR Rd,Ra,Rb
+ADDI/SUBI Rd,Ra,imm            NOT Rd,Ra
+SHL/SHR Rd,Ra,imm              INC/DEC Rd      CMP Ra,Rb
+JMP/JZ/JNZ/JC/JNC/JGT/JLT 标签  HALT            NOP
+DW 1,2,3       DS 4
+```
+
+一行一条，`;` / `#` 后面是注释，`loop:` 定义标签，数支持十进制和 `0x` / `0b` / `0o`。数据写在 `HALT` 后面，免得被当指令执行。`trace=true` 会给逐步执行过程（每步的寄存器变化）。
+
+**`logic_sim`**——门级网表，一行一个门：
+
+```
+A = INPUT
+B = INPUT
+n1 = AND A B
+Y = XOR n1 B
+```
+
+门型 `AND` / `OR` / `NOT` / `NAND` / `NOR` / `XOR` / `XNOR` / `BUF` / `DFF`。不给 `inputs` 就列真值表（纯组合电路，最多 6 个输入）；给了 `inputs` 就按值算一遍。网表里有 `DFF` 就变成时序仿真，按时钟跑 `cycles` 个周期——`inputs` 可以给 `"0101"` 这样的序列来驱动，时钟端口叫 `CLK` 时在上升沿采样。
+
+**`sci_calc`**——超高精度科学计算器。丢一个表达式进去，一次算到指定有效数字（默认 50 位，最多 1000 位），不用再为了让模型算个数而去 `write_file` + `run_code` 绕一圈。`decimal` 底子 + 自己实现的 π（Machin 公式）和三角函数级数，整数的加减乘幂走 Python 大整数，**一位不差**：
+
+```
+(1+2)**100 / sqrt(3)          2**100            factorial(50)
+1/7                           pi                1e6*sqrt(2)
+sin(pi/6)  cos(1.234)  tan(pi/4)  atan2(1,1)
+ln(2)  log(1000,10)  lg(1000)  log2(1024)  exp(1)
+comb(52,5)  perm(10,3)  gcd(1071,462)  isqrt(2**100)
+```
+
+`0.1 + 0.2` 在这里就是 `0.3`（数字字面量按原文读，不过二进制浮点那一手）；一次可以给多个式子，换行或分号隔开。结果太大（超过 1500 位）会直接拒绝，免得又慢又占地方。
+
+展开看个例子：
+
+```
+你: 帮我算一下 72MHz 主频、115200 波特率的串口分频对不对，再跑个 1+2+...+10 的汇编，顺便 π 算到 50 位
+[工具] mcu_calc({'op': 'uart', 'f_cpu': 72000000, 'baud': 115200})
+     -> USARTDIV=39.0625，BRR=0x0271，实际 115384.6 bps，误差 +0.160%
+[工具] asm_sim({'source': 'LI R1,0 ...', 'trace': True})
+     -> R1=45，执行到 HALT，共 41 步
+[工具] sci_calc({'expression': 'pi', 'precision': 50})
+     -> 3.1415926535897932384626433832795028841971693993751
+塔菲: 波特率误差 +0.16%，能放心用喵～汇编那边跑出来是 45，对的喵
+```
+
+## 文本与数据解析
+
+**`regex_test`**——正则调试器。给正则和文本，列出每一处匹配的位置（偏移）、内容和各个分组（命名分组会标出组名）；再给 `replace` 就顺带做替换，支持 `\1` 和 `\g<name>` 反向引用。`flags` 可以传 `i` / `m` / `s` / `x` 的组合。
+
+`re` 模块没法给匹配设超时，所以它先扫一遍正则，把 `(a+)+`、`(.*)*` 这种**嵌套量词**（灾难性回溯的典型形状）拦下来报错，免得一个写错的正则把整个服务卡死。正常的 `(a|b)+`、`(\d{4}-)+`、`(a+)?` 不会误伤。
+
+**`diff_text`**——两段文本 / 代码的 unified diff，带「X 行 → Y 行；新增 N 行，删除 M 行」的统计，`context` 控制差异上下显示几行（默认 3）。
+
+**`json_tool`**——`op=format` 缩进美化（默认，中文不转义成 `\uXXXX`）、`op=minify` 压成一行、`op=get` 按路径取值、`op=validate` 只校验。语法错会指到第几行第几列并画出那一行：
+
+```
+JSON 不合法：Expecting ':' delimiter（第 3 行第 7 列）
+>   3 |   "b" 2
+     |       ^
+```
+
+取值路径支持 `data.items[0].name`、`items[-1]`、`["名字"]` 这几种写法，走错了会分清是「键不存在（附上现有键名）」「下标越界（附上长度）」还是「这一层不是对象 / 数组」。
 
 ## 安全护栏
 
@@ -158,6 +257,8 @@ python -m taffy.web
 ### 3. `open_url`：防 SSRF
 
 只认 http/https；开链接前会解析域名，指向**本机、内网、保留地址**的直接拒绝（服务跑在 `0.0.0.0`，不拦的话能被当成跳板去戳内网服务）。重定向**不交给 requests 自动跟**，而是自己一跳一跳走，每一跳都重新校验一次地址——否则一个公网页面 302 到 `127.0.0.1` 就绕过去了。下载上限 2MB、超时 20 秒、正文截断 6000 字。
+
+「跳转」认三种：HTTP 的 `301/302/303/307/308`、页面里的 `<meta http-equiv="refresh">`、以及 JS 里的 `location.href = ...` / `location.replace()` / `location.assign()`（不少站点先给一个空白中转页，再用 JS 把人送到真地址）。最多跟 8 跳；跳回走过的地址就停下并说明是在哪几个地址之间来回跳，不会死循环（常见于要先登录、或先同意 Cookie 的中间页）。
 
 判断用的不是「是不是私网」而是「**是不是全球可达**」（`ip.is_global`），顺带把 CGNAT（`100.64.0.0/10`）这类非公网段也挡掉。
 
@@ -238,7 +339,7 @@ python -m taffy.web
 
 ## 人设提示词
 
-在 [config.py](file:///f:/新建文件夹/Taffy-Agent/taffy/config.py) 的 `SYSTEM_PROMPT`，一共 21 条。除了说话风格，几条硬规矩是：
+在 [config.py](file:///f:/新建文件夹/Taffy-Agent/taffy/config.py) 的 `SYSTEM_PROMPT`，一共 24 条。除了说话风格，几条硬规矩是：
 
 - 代码必须完整写进回答里（workspace 只是缓存，不是交付物），跑通后删掉临时文件；
 - 需求落在她会的那几个方向（含写代码 / 调试 / 排错 / 选型）时，先 `search_knowledge` 查知识库里有没有现成的方案、题解、模板、教材写法，有就参考着来并标出处，实在沾不上边才从零想；
@@ -249,6 +350,9 @@ python -m taffy.web
 - 拿到链接用 `open_url` 读原文再回答，打不开就直说，不许瞎编；
 - 除了算法题，嵌入式 / 单片机 / 物联网 / 计算机组成原理 / 数字取证也答，这几个方向先查知识库教材原文再回（取证那几本是英文的，提示里让它用英文关键词检索）；
 - 数字取证有专门工具：先 `identify_file` 看是什么、`hash_file` 固定哈希，再按需 `extract_strings` / `carve_files` / `file_metadata` 深挖，结论要带上偏移量 / 哈希 / 时间戳；分析完不许删雏草姬放进来的样本；
+- 工程计算和教学仿真别硬算，该用 `asm_sim` / `mcu_calc` / `logic_sim` / `number_convert` 就用（寄存器怎么配、位型长什么样、电路输出是几、汇编跑出来什么，都直接算给雏草姬看）；
+- 纯数学运算别硬算、也别为算个数去 `write_file` + `run_code` 绕一圈，直接交给 `sci_calc`（默认 50 位有效数字，最多 1000 位，整数是精确大数）；
+- 正则 / 差异 / JSON 这类文本活儿也别专门写代码，用 `regex_test` / `diff_text` / `json_tool`（写正则、抠日志、比配置、取值、校验都用它们；`regex_test` 会拦嵌套量词防回溯卡死）；
 - 能看图：雏草姬发的图片当轮有效、看完即清，图里的信息要当轮抄进回答，下一轮不许假装还记得。
 
 ## 新增一个工具
@@ -286,8 +390,9 @@ def say_hi(name: str) -> str:
 
 - **C/C++ 编译器很老**：本机用 `CXX` 指的 TDM-GCC 4.9.2（2014 年），只支持到 **C++11**。`std::filesystem`、结构化绑定、`auto` 简写这些 C++14/17 的东西编译不过，所以工具描述里专门提醒了模型别用。换个新一点的 MinGW 把 `CXX` 指过去就能解决。
 - **静态审查会误伤**：黑名单写死了，塔菲用了没预料到的库可能被拦下（报错里会说明命中了哪一段）。`std::remove`、字符串里出现 `"system("` 这类已做处理，不会误判。
-- `web_search` 用的是 360 搜索的网页解析，**没有官方 API**，页面结构变了就可能失效。而且它走直连、绕开系统代理，换了网络环境可能需要调整。
+- `web_search` 是抓搜索结果页来解析的，**没有官方 API**。它按 360 → 必应 → DuckDuckGo 的顺序试，一家抠不到就换下一家，所以单家被风控或者换模板不会整个失效；但全都没结果的情况依旧可能发生。失败时会带上每家的原因（连不上 / 没抠到结果 + 页面字节数），照着就能判断是网络出不去还是被挡下来了。
 - `open_url` 的正文抽取是「挑 `<p>` 总字数最多的容器」这种启发式，不是 Readability，遇到结构奇怪的页面可能抓不准。
+- 纯前端渲染（正文完全由 JS 拉接口后再画上去）、要登录、或者有强反爬的站点，`open_url` 还是抓不到正文：它不跑 JS，只能顺带从内嵌 JSON（`__NEXT_DATA__` / `ld+json` / `__NUXT__` 之类）里捞一份，捞不到就只能如实说「抓不到」，不会瞎编。
 - 对话历史只存在内存里，退出就清空，没有持久化，也没有超长上下文的裁剪。
 
 ## 参考

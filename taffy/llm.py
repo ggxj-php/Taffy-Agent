@@ -1,7 +1,7 @@
 """模型接入层：只负责发请求，不掺业务逻辑。"""
 from openai import OpenAI
 
-from .config import API_KEY, BASE_URL, MODEL
+from .config import API_KEY, BASE_URL, MAX_TOKENS, MODEL
 
 client = OpenAI(api_key=API_KEY, base_url=BASE_URL)
 
@@ -16,6 +16,7 @@ def stream_chat(messages: list, tools: list):
         model=MODEL,
         messages=messages,
         tools=tools,
+        max_tokens=MAX_TOKENS,
         stream=True,
     )
 
