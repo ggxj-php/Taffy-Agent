@@ -1,8 +1,11 @@
 """联网工具：搜资料，以及打开链接读正文。
 
 搜索是抓结果页 HTML 再解析，没有用付费 API。抓 HTML 天生怕两件事：被风控挡下来、
-对方换模板。所以这里挂了多家引擎（360 / 必应 / DuckDuckGo），一家抠不到就换下一
-家，并把每家的失败原因一起带回去，方便看出是哪一种问题。
+对方换模板。所以这里挂了多家引擎（百度 / 必应 / 360 / DuckDuckGo），一家抠不到就换
+下一家，并把每家的失败原因一起带回去，方便看出是哪一种问题。
+
+百度排在最前头：中文查询里它最稳，必应碰上中文长句会把查询拆散（「数字取证 内存
+取证 volatility」这种复合词，它会退化成只搜「数字」）。
 
 代理默认直连（见 config.SEARCH_PROXY）；机器必须靠代理才能出网的话，在 .env 里设。
 open_url 负责把网页正文抓回来，只认 http/https，本机和内网地址不给开。HTTP 302、
@@ -78,8 +81,19 @@ SEARCH_HEADERS = {
 }
 
 
+SCRIPT_BLOCK_RE = re.compile(r"(?is)<(script|style)\b.*?</\1>")
+
+
 def _clean(text: str) -> str:
-    return html.unescape(re.sub(r"<.*?>", "", text)).strip()
+    """剥标签、还原实体、把换行和连续空白压成一个空格。
+
+    标签要按 [^>]* 匹配：结果页里的开始标签经常换着行写（百度尤其），用 .*? 会漏掉
+    \n 从而把半个标签留在正文里。script / style 得整段扔掉——页面内嵌的 JSON 就是
+    一堆裸文本，光剥标签剥不掉。
+    """
+    text = SCRIPT_BLOCK_RE.sub(" ", text)
+    text = html.unescape(re.sub(r"<[^>]*>", "", text))
+    return re.sub(r"\s+", " ", text).strip()
 
 
 def _proxies():
@@ -103,6 +117,61 @@ def _href(open_tag: str) -> str:
     """从一个 <a ...> 的开始标签里抠 href。属性顺序不固定，所以单独找。"""
     m = _HREF_RE.search(open_tag)
     return html.unescape(m.group(1)) if m else ""
+
+
+# ---------------- 百度 ----------------
+# 每条结果是一个 <div class="result c-container ...">，真实地址就挂在它的 mu 属性上
+# （<h3> 里的 href 是 www.baidu.com/link?url= 的跳转链，得再跟 302 才知道去哪，用它兜底）。
+#
+# 这里用 lxml 而不是正则：百度的页面里塞满了 <!--s-data:{...}--> 注释，注释里就是
+# 一堆 JSON。用正则按 "取标题到下一个标题之间" 切窗口，窗口会从注释中间开头，闭合的
+# --> 落在窗口外，剥不干净，JSON 就会漏进摘要里。lxml 天然不把注释当文本。
+_BAIDU_JUNK_HOSTS = ("recommend_list.baidu.com",)
+_BAIDU_JUNK_URLS = ("https://top.baidu.com/board",)
+_BAIDU_SNIPPET = 300
+
+
+def _parse_baidu(page: str):
+    try:
+        doc = lxml.html.fromstring(page)
+    except Exception:
+        return []
+    lxml.etree.strip_elements(doc, "script", "style", with_tail=False)
+
+    results, seen = [], set()
+    for div in doc.iterfind(".//div"):
+        classes = (div.get("class") or "").split()
+        if "result" not in classes or "c-container" not in classes:
+            continue
+        head = div.find(".//h3")
+        if head is None:
+            continue
+        title = re.sub(r"\s+", " ", head.text_content()).strip()
+        if not title:
+            continue
+        url = (div.get("mu") or "").strip()
+        if not url:
+            anchor = head.find(".//a")
+            url = (anchor.get("href") if anchor is not None else "") or ""
+        if not url:
+            continue
+        host = (urlsplit(url).hostname or "").lower()
+        if host in _BAIDU_JUNK_HOSTS or url.startswith(_BAIDU_JUNK_URLS):
+            continue
+        if url in seen:      # 偶尔有嵌套的同一条，去个重
+            continue
+        seen.add(url)
+        body = re.sub(r"\s+", " ", div.text_content()).strip()
+        if body.startswith(title):
+            body = body[len(title):].strip()
+        results.append(
+            {
+                "title": title,
+                "url": html.unescape(url),
+                "snippet": body[:_BAIDU_SNIPPET],
+            }
+        )
+    return results
 
 
 # ---------------- 360 搜索 ----------------
@@ -185,8 +254,9 @@ def _parse_ddg(page: str):
 
 # 按顺序试，谁先抠到结果就用谁
 ENGINES = (
-    {"name": "360 搜索", "url": "https://www.so.com/s", "param": "q", "parse": _parse_360},
+    {"name": "百度", "url": "https://www.baidu.com/s", "param": "wd", "parse": _parse_baidu},
     {"name": "必应", "url": "https://www.bing.com/search", "param": "q", "parse": _parse_bing},
+    {"name": "360 搜索", "url": "https://www.so.com/s", "param": "q", "parse": _parse_360},
     {
         "name": "DuckDuckGo",
         "url": "https://html.duckduckgo.com/html/",
@@ -282,11 +352,43 @@ JS_REDIRECT_RE = re.compile(
     r"""(?:window\.)?location(?:\.href)?\s*(?:=|\.replace\(|\.assign\()\s*["']([^"']+)["']""",
     re.I,
 )
-SCRIPT_BLOCK_RE = re.compile(r"(?is)<(script|style)\b.*?</\1>")
+
+
+# 真正碰不得的网段：本机、内网、链路本地、运营商级 NAT。
+#
+# 这里没用 ip.is_global 一票否决：手机上挂透明代理（Clash 之类）时 DNS 会被劫持成
+# 假 IP——Clash 默认就拿 198.18.0.0/15 当 fake-ip 池，所有域名都解析到这个段里。
+# 而 198.18.0.0/15 在 Python 里既不算 global 也不算 reserved，用 is_global 会把
+# 所有正常外链都判成内网，整条 open_url 就废了。所以改成只拦下面这些段。
+_LOCAL_NETS = tuple(
+    ipaddress.ip_network(cidr)
+    for cidr in (
+        "0.0.0.0/8",        # 本机
+        "10.0.0.0/8",       # 私网
+        "100.64.0.0/10",    # 运营商级 NAT
+        "127.0.0.0/8",      # 回环
+        "169.254.0.0/16",   # 链路本地，云元数据 169.254.169.254 就在这一段
+        "172.16.0.0/12",    # 私网
+        "192.168.0.0/16",   # 私网
+        "::/128",           # 未指定
+        "::1/128",          # 回环
+        "fc00::/7",         # 唯一本地地址
+        "fe80::/10",        # 链路本地
+    )
+)
+
+
+def _is_local(ip) -> bool:
+    """这个地址是不是本机 / 内网。v4-mapped 的 v6 地址先还原成 v4 再判。"""
+    if ip.version == 6 and ip.ipv4_mapped is not None:
+        ip = ip.ipv4_mapped
+    if ip.is_multicast:
+        return True
+    return any(ip in net for net in _LOCAL_NETS)
 
 
 def _host_blocked(host: str) -> bool:
-    """本机、内网、保留地址一律不给开，免得拿塔菲当跳板去戳内部服务"""
+    """本机、内网、链路本地一律不给开，免得拿塔菲当跳板去戳内部服务"""
     if not host:
         return True
     host = host.lower().strip("[]")
@@ -301,9 +403,7 @@ def _host_blocked(host: str) -> bool:
             ip = ipaddress.ip_address(info[4][0])
         except ValueError:
             continue
-        # is_global 把私网、回环、链路本地、保留、CGNAT(100.64/10) 这些都算作
-        # 非全局，一次挡掉；组播地址它却算全局，所以另判一下
-        if not ip.is_global or ip.is_multicast:
+        if _is_local(ip):
             return True
     return False
 
