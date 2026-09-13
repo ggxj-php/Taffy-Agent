@@ -3,6 +3,7 @@
 对外主要是 ask_stream()：它是一个事件生成器，把思考、正文、工具调用逐段吐出来。
 终端（ask/run）和网页后端都消费同一套事件，行为完全一致。
 """
+from . import settings
 from .config import EXIT_WORDS, MAX_ROUNDS, SYSTEM_PROMPT
 from .llm import stream_chat
 from .tools import TOOLS, execute
@@ -76,11 +77,15 @@ class TaffyAgent:
         else:
             self.messages.append({"role": "user", "content": user_input})
 
+        # 带图这一轮走图片模型，纯文字走聊天模型；两个模型在后台能分开配。
+        # 工具循环里图片还在历史里，所以整轮都用同一个模型，不会中途换来换去。
+        model = settings.model_for(vision=image_slot is not None)
+
         try:
             for _ in range(MAX_ROUNDS):
                 message = None
                 try:
-                    for kind, payload in stream_chat(_sendable(self.messages), TOOLS):
+                    for kind, payload in stream_chat(_sendable(self.messages), TOOLS, model):
                         if kind == "message":
                             message = payload
                         elif kind == "thinking":

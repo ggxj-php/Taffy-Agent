@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#ffb7d5">
+<title>塔菲后台</title>
+<link rel="icon" href="/static/avatar.jpg">
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body class="admin">
+
+<header class="topbar">
+  <img class="avatar" src="/static/avatar.jpg" alt="塔菲">
+  <div class="who">
+    <div class="name">塔菲后台</div>
+    <div class="status" id="status">看看钥匙喵…</div>
+  </div>
+  <button type="button" id="logout" class="new-chat" hidden>退出</button>
+</header>
+
+<main class="admin-main">
+
+  <section id="login-view" class="card" hidden>
+    <h2>先登录喵</h2>
+    <p class="hint">
+      口令每天换一次，只有塔菲的主人知道喵。<br>
+      怎么配、怎么算，见 README 的「后台管理」那一节。
+    </p>
+    <form id="login-form">
+      <label>口令
+        <input type="password" id="password" placeholder="当日口令"
+               autocomplete="current-password">
+      </label>
+      <button type="submit">登录</button>
+    </form>
+  </section>
+
+  <section id="panel-view" hidden>
+    <div class="card">
+      <h2>模型</h2>
+      <label>聊天模型（纯文字）
+        <input id="model" list="model-list" placeholder="deepseek-flash" autocomplete="off">
+      </label>
+      <label>图片模型（收到图片那一轮用）
+        <input id="vision-model" list="model-list" placeholder="deepseek-flash" autocomplete="off">
+      </label>
+      <datalist id="model-list"></datalist>
+      <button type="button" id="save-models">保存模型</button>
+      <p class="hint" id="history-hint"></p>
+      <div class="chips" id="history-chips"></div>
+    </div>
+
+    <div class="card">
+      <h2>API Key</h2>
+      <p class="hint" id="key-state"></p>
+      <label>新的 Key
+        <input type="password" id="api-key" placeholder="留空不改动；填了就覆盖"
+               autocomplete="new-password">
+      </label>
+      <button type="button" id="save-key">保存 Key</button>
+      <p class="hint">存下来立刻生效，不用重启。当前 key 不回显，也不显示头尾。</p>
+    </div>
+  </section>
+
+</main>
+
+<script src="/static/admin.js"></script>
+</body>
+</html>

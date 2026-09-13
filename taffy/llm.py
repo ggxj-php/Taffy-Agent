@@ -1,19 +1,44 @@
 """模型接入层：只负责发请求，不掺业务逻辑。"""
+import threading
+
 from openai import OpenAI
 
-from .config import API_KEY, BASE_URL, MAX_TOKENS, MODEL
+from . import settings
+from .config import BASE_URL, MAX_TOKENS
 
-client = OpenAI(api_key=API_KEY, base_url=BASE_URL)
+_clients = {}
+_clients_lock = threading.Lock()
 
 
-def stream_chat(messages: list, tools: list):
+def _client():
+    """按当前 key 建客户端。
+
+    key 能在后台改，所以不能像以前那样在 import 时建一次就完事；
+    这里按 key 缓存，换 key 之后的第一次请求就会自动用新的，旧客户端顺手丢掉。
+    """
+    key = settings.api_key()
+    with _clients_lock:
+        client = _clients.get(key)
+        if client is None:
+            client = OpenAI(api_key=key, base_url=BASE_URL)
+            _clients.clear()
+            _clients[key] = client
+        return client
+
+
+def stream_chat(messages: list, tools: list, model: str = ""):
     """流式发一次请求，边收边吐增量。
 
     依次产出 ("thinking", 片段) / ("content", 片段)，最后产出
     ("message", 拼好的 assistant 消息)，那条消息可以直接塞回 messages。
+
+    model 留空就用后台配的聊天模型；带图的轮次由 core 传图片模型进来。
     """
-    stream = client.chat.completions.create(
-        model=MODEL,
+    model = (model or "").strip() or settings.chat_model()
+    settings.remember_model(model)
+
+    stream = _client().chat.completions.create(
+        model=model,
         messages=messages,
         tools=tools,
         max_tokens=MAX_TOKENS,
@@ -22,7 +47,7 @@ def stream_chat(messages: list, tools: list):
 
     text_parts = []
     calls = {}  # index -> {"id", "name", "arguments"}，流式下 tool_call 是分片下发的
-    finish = None  # 结束原因，"length" 表示被 max_tokens 截断
+    finish = None
 
     for chunk in stream:
         if not chunk.choices:
@@ -30,7 +55,6 @@ def stream_chat(messages: list, tools: list):
         choice = chunk.choices[0]
         if choice.finish_reason:
             finish = choice.finish_reason
-
         delta = choice.delta
         if delta is None:
             continue
@@ -65,14 +89,14 @@ def stream_chat(messages: list, tools: list):
             }
             for index, slot in sorted(calls.items())
         ]
-    elif not text:
-        # 既没有正文、也没有工具调用。这种消息发给 API 会被判非法（400：
-        # content or tool_calls must be set），一旦写进历史，整个会话之后每次都 400。
-        # 所以这里直接报错，让上层走 error 分支，不把它记进对话历史。
-        # 最常见的成因：思考把 max_tokens 吃光了，正文没轮到输出。
-        raise RuntimeError(
-            "模型光思考没吐正文就结束了（%s），这一轮作废，直接再问一次就好"
-            % ("输出被 max_tokens 截断，可以在 config.py 里调大 MAX_TOKENS" if finish == "length"
-               else "原因不明")
-        )
+    if not message["content"] and not message.get("tool_calls"):
+        # 一个字都没吐出来。stream 正常结束的情况下，多半是思考把 max_tokens 吃光了；
+        # 要是 finish 也不是 length，那就是流被中途掐断的（网络/代理），报个清楚的错，
+        # 让 core 去处理——绝不能把 content 为 None 的消息塞进历史，那会让会话之后永远 400。
+        if finish == "length":
+            raise RuntimeError(
+                "模型光思考没吐正文就结束了（输出被 max_tokens 截断，可以在 config.py 里调大 MAX_TOKENS）"
+            )
+        raise RuntimeError(f"模型没返回任何内容（finish_reason={finish}）")
+
     yield "message", message

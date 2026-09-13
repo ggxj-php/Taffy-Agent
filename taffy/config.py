@@ -20,6 +20,10 @@ BASE_URL = "https://api.deepseek.com/v1"
 #https://api.deepseek.com/v1
 MODEL = "deepseek-flash"
 
+# 发图片时用的模型。不是每个模型都吃图片（有的会直接 400），所以单独留个口子，
+# 默认跟聊天模型一致。两个都能在网页后台 /admin 里改，改完立刻生效。
+VISION_MODEL = MODEL
+
 # 单次回复的最大输出 token 数。带思考的模型（deepseek 这类）思维链也吃这个额度：
 # 复杂问题上思考一开，2048 / 4096 很容易被思考吃光，正文一个字都轮不到，表现就是
 # 「思考到一半戛然而止、这一轮没有任何回答」。所以放到 16384，给正文留足空间。
@@ -36,6 +40,12 @@ CXX = os.environ.get("CXX", "g++").strip() or "g++"
 #   http://host:port   指定代理地址
 # 部署到别的机器上如果搜不出东西、又确认是网络出不去，就把这个设成 system。
 SEARCH_PROXY = os.environ.get("SEARCH_PROXY", "").strip()
+
+# 网页后台（/admin）登录口令的前缀。
+# 口令是按天算的：md5(ADMIN_PASSWORD_PREFIX + 当天日期 YYMMDD)，所以这里配的
+# 前缀就是这个口令里唯一的秘密。代码里**故意不留默认值**——留了就等于把口令公开，
+# 谁都能算出当天口令。不配的话后台登录会直接拒绝并提示去 .env 里配。
+ADMIN_PASSWORD_PREFIX = os.environ.get("ADMIN_PASSWORD_PREFIX", "").strip()
 
 # 单次提问内，工具最多轮询这么多次
 MAX_ROUNDS = 100

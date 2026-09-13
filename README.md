@@ -12,8 +12,10 @@
 Taffy-Agent/
 ├── agent.py                 # 终端入口：python agent.py
 ├── .env                     # 密钥（已 gitignore，不进仓库）
+├── admin.json               # 后台改过的模型 / key（已 gitignore，改过才生成）
 ├── taffy/
 │   ├── config.py            # 模型、运行参数、人设提示词
+│   ├── settings.py          # 后台可改的配置（模型、key），覆盖 .env
 │   ├── sandbox.py           # 工作区沙箱：路径越界检查
 │   ├── llm.py               # 模型接入层
 │   ├── core.py              # TaffyAgent：对话历史 + 工具循环
@@ -40,8 +42,10 @@ Taffy-Agent/
 │   │   └── _codescan.py     # C/C++/Java/JS 跑前静态审查
 │   └── web/                 # 网页版
 │       ├── app.py           # FastAPI 后端，SSE 推事件流
+│       ├── admin.py         # 后台管理：动态口令登录 + 改模型 / 改 key
 │       ├── __main__.py      # python -m taffy.web
 │       └── static/          # 前端：index.html / app.js / style.css
+│           ├── admin.html   # 后台页面（/admin），配 admin.js
 │           ├── stickers/    # 22 张塔菲表情包
 │           └── vendor/      # marked / highlight.js / DOMPurify
 ├── knowledge/               # 知识库原始文档，Agent 只读（已随仓库提供）
@@ -82,11 +86,14 @@ pip install openai requests python-dotenv pypdf python-docx jieba numpy \
 ```
 DEEPSEEK_API_KEY=sk-你的key
 CXX=g++.exe路径
+ADMIN_PASSWORD_PREFIX=你自己定的一串
 ```
 
 没有 key（或没建这个文件）时，程序启动会直接报错提醒，不会静默失败。
 
 `CXX` 是可选的，只在 `run_code` 跑 `.cpp` / `.c` 时用到：填 g++ 的绝对路径就行，`.c` 会自动用同目录的 `gcc`。不填就按 PATH 里的 `g++` 找。**不用把它加进系统 PATH**——那样会影响全局，还要重启终端才生效，配在项目里更省事。
+
+`ADMIN_PASSWORD_PREFIX` 是网页后台 `/admin` 登录口令的前缀（详见「后台管理」）：前缀拼上当天日期就是明文口令，服务端比对 md5。不配就登不进后台。
 
 `SEARCH_PROXY` 也是可选的，控制 `web_search` 走不走代理，默认**直连**（百度这类国内引擎走代理反而容易被拒）。部署到别的机器上搜不出东西时，先看工具返回的提示，它会写明每家引擎是「连不上」还是「没抠到结果（页面 xx 字节）」：如果各家都连不上，说明是网络出不去，把这项设成 `system`（跟随系统 / 环境变量里的代理）或者直接填地址就行。
 
@@ -98,6 +105,8 @@ SEARCH_PROXY=http://127.0.0.1:7897
 `-static` 是默认带的，编译出来的临时可执行文件不依赖编译器目录下的 dll。
 
 单次回复最多输出多少 token，在 `taffy/config.py` 里的 `MAX_TOKENS` 调，现在是 **16384**。带思考的模型（deepseek 这类）思维链也占这个额度，卡太小会出现「思考到一半戛然而止、这一轮完全没有正文」——官方默认的 4096 在复杂问题上就很容易被思考吃光，所以这里放得比较宽。想省钱可以往下调，只是复杂问题更容易撞上这种情况（真撞上了塔菲会明确说这轮作废，不会把会话弄坏）。
+
+模型和 key 也可以不碰 `.env`、直接在网页后台里改（改完立刻生效，不用重启），见下面的「后台管理」。
 
 ## 运行
 
@@ -136,6 +145,25 @@ python -m taffy.web
 - **输入框**：回车是换行，不会误发；发送点「发送」按钮。
 
 > 改了 `.py`（含 `config.py` 提示词）要重启服务；改 `static/` 下的前端文件刷新页面即可。
+
+### 后台管理
+
+服务起来之后访问 **`/admin`**（本机就是 http://127.0.0.1:8000/admin ，手机换成对应地址）。
+
+- **登录口令按天变，仓库里不含任何人的口令**：口令 = `md5(前缀 + 当天日期)`，日期写成 `YYMMDD`（按北京时间算，服务器时钟是 UTC 也不会把日期算错一天）。**前缀由你自己定，配在 `.env` 里**：
+
+  ```
+  ADMIN_PASSWORD_PREFIX=你自己定的一串（别人猜不到的）
+  ```
+
+  代码里**故意不留默认前缀**——留了就等于把口令公开，谁都能算出当天值。不配的话登录会直接拒绝并提示你去配。算口令的逻辑在 `taffy/web/admin.py` 的 `expected_password()`：想换算法改那个函数，想换口令改 `.env` 里那一行再重启。登录时填拼出来的**明文**，服务端算 md5 比对，不存明文。
+- **登录状态**：成功后发一个随机 token 的 cookie（HttpOnly），12 小时有效；服务重启后要重新登。
+- **能改什么**：
+  - **聊天模型 / 图片模型分开设**：纯文字那一轮走前者，消息里带图那一轮走后者。两个默认都是 `deepseek-flash`。
+  - **API Key**：填新的就覆盖。**当前 key 不回显**，页面只告诉你它来自后台设置还是 `.env`。
+  - **历史模型**：用过的模型名会记下来（去重，最多 30 条），点一下填进输入框。
+- **存哪**：项目根目录的 `admin.json`（已 gitignore——里面有明文 key，别提交）。没配过的项自动回落到 `.env` / `config.py`，所以这个文件删掉也不会坏。
+- **生效时机**：**立刻生效、不用重启**——模型和 key 都是每次请求现问的。
 
 ## 内置工具
 

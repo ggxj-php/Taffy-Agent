@@ -530,3 +530,105 @@ body {
   .bubble { max-width: 76%; }
   .sticker { width: 140px; height: 140px; }
 }
+
+/* ---------- 后台管理（/admin） ----------
+   聊天页是 flex 满屏不滚动的，后台要能上下滚，所以整套样式都挂在 body.admin 下面。 */
+body.admin {
+  display: block;
+  overflow-y: auto;
+}
+
+body.admin .status.bad { color: #d2496f; }
+
+.admin-main {
+  max-width: 620px;
+  margin: 0 auto;
+  padding: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+body.admin .card {
+  padding: 14px 15px;
+  background: var(--bubble);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  box-shadow: 0 2px 10px rgba(255, 158, 199, .14);
+}
+
+body.admin .card h2 {
+  margin: 0 0 10px;
+  font-size: 15px;
+}
+
+body.admin .card label {
+  display: block;
+  margin-bottom: 10px;
+  font-size: 13px;
+  color: var(--ink-soft);
+}
+
+body.admin .card input {
+  width: 100%;
+  margin-top: 4px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: #fff8fc;
+  color: var(--ink);
+  font: inherit;
+  font-size: 16px; /* 别改小，iOS 上小于 16px 会自动放大页面 */
+  outline: none;
+}
+
+body.admin .card input:focus { border-color: var(--pink-dark); background: #fff; }
+
+body.admin .card button {
+  border: none;
+  border-radius: 999px;
+  padding: 10px 18px;
+  font: inherit;
+  font-weight: 600;
+  color: #fff;
+  background: linear-gradient(135deg, var(--pink-dark), var(--pink-deep));
+  box-shadow: 0 3px 10px rgba(224, 114, 159, .3);
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+
+body.admin .card button:disabled { opacity: .5; box-shadow: none; cursor: default; }
+body.admin .card button:not(:disabled):active { transform: scale(.96); }
+
+body.admin .hint {
+  margin: 10px 0 0;
+  font-size: 12.5px;
+  line-height: 1.7;
+  color: var(--ink-soft);
+}
+
+body.admin .hint code {
+  padding: 1px 5px;
+  border-radius: 6px;
+  background: #fff0f7;
+  color: var(--pink-deep);
+  font-size: 12px;
+}
+
+body.admin .chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+body.admin .chips button {
+  padding: 5px 12px;
+  font-weight: 400;
+  font-size: 12.5px;
+  color: var(--pink-deep);
+  background: #fff0f7;
+  border: 1px solid var(--line);
+  box-shadow: none;
+}
+

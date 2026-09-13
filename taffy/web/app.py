@@ -17,6 +17,7 @@ from pydantic import BaseModel
 
 from ..core import TaffyAgent
 from ..kb import warmup
+from .admin import router as admin_router
 
 STATIC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
 
@@ -30,6 +31,8 @@ async def lifespan(_app):
 
 app = FastAPI(title="Taffy Agent", lifespan=lifespan)
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+# 后台管理：/admin 页面 + /api/admin/* 接口
+app.include_router(admin_router)
 
 # session_id -> {"agent": TaffyAgent, "lock": Lock}
 _sessions = {}
