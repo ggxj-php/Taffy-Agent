@@ -22,11 +22,16 @@ def stream_chat(messages: list, tools: list):
 
     text_parts = []
     calls = {}  # index -> {"id", "name", "arguments"}，流式下 tool_call 是分片下发的
+    finish = None  # 结束原因，"length" 表示被 max_tokens 截断
 
     for chunk in stream:
         if not chunk.choices:
             continue
-        delta = chunk.choices[0].delta
+        choice = chunk.choices[0]
+        if choice.finish_reason:
+            finish = choice.finish_reason
+
+        delta = choice.delta
         if delta is None:
             continue
 
@@ -60,4 +65,14 @@ def stream_chat(messages: list, tools: list):
             }
             for index, slot in sorted(calls.items())
         ]
+    elif not text:
+        # 既没有正文、也没有工具调用。这种消息发给 API 会被判非法（400：
+        # content or tool_calls must be set），一旦写进历史，整个会话之后每次都 400。
+        # 所以这里直接报错，让上层走 error 分支，不把它记进对话历史。
+        # 最常见的成因：思考把 max_tokens 吃光了，正文没轮到输出。
+        raise RuntimeError(
+            "模型光思考没吐正文就结束了（%s），这一轮作废，直接再问一次就好"
+            % ("输出被 max_tokens 截断，可以在 config.py 里调大 MAX_TOKENS" if finish == "length"
+               else "原因不明")
+        )
     yield "message", message

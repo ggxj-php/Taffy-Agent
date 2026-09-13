@@ -22,6 +22,21 @@ def _valid_image(image):
     )
 
 
+def _sendable(messages):
+    """发请求前剔掉非法的 assistant 消息。
+
+    API 要求 assistant 消息至少有 content 或 tool_calls，两者都没有会直接 400。
+    历史里万一混进过这种空消息（旧版本遇到过：思考吃光 max_tokens，正文没输出），
+    整个会话之后每次都会 400，这里过滤一下让它自己恢复，不用重开会话。
+    """
+    return [
+        message for message in messages
+        if message.get("role") != "assistant"
+        or message.get("content")
+        or message.get("tool_calls")
+    ]
+
+
 class TaffyAgent:
     """一个塔菲会话。对话历史存在实例里，所以同一个实例能记住上下文。"""
 
@@ -65,7 +80,7 @@ class TaffyAgent:
             for _ in range(MAX_ROUNDS):
                 message = None
                 try:
-                    for kind, payload in stream_chat(self.messages, TOOLS):
+                    for kind, payload in stream_chat(_sendable(self.messages), TOOLS):
                         if kind == "message":
                             message = payload
                         elif kind == "thinking":
@@ -78,6 +93,11 @@ class TaffyAgent:
 
                 if message is None:
                     yield {"type": "error", "message": "模型没有返回任何内容"}
+                    return
+
+                # 兜底：空正文又没工具调用的消息一旦进历史，后面每轮都会 400
+                if not message.get("content") and not message.get("tool_calls"):
+                    yield {"type": "error", "message": "模型这一轮没吐内容，跳过它喵，再问一次就好"}
                     return
 
                 self.messages.append(message)
