@@ -377,44 +377,72 @@ async function ensureSession(force) {
 
 /* ---------------- SSE ---------------- */
 
+/* 手机切后台、信号抖动的时候，这条流可能悄无声息地断掉：不报错也不结束，
+   reader.read() 就那么挂着，界面永远停在「正在思考喵…」、发送按钮也一直锁着，
+   看起来就跟没网了一样（刷新才恢复）。所以每收到一块数据就重置一次计时器，
+   静默太久就自己掐掉，把状态放出来。 */
+const STREAM_IDLE_MS = 60000;
+
 async function streamChat(id, message, onEvent, image) {
   const body = { session_id: id, message };
   if (image) body.image = image;
-  const resp = await fetch('/api/chat', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
-  });
-  if (!resp.ok || !resp.body) throw new Error(`服务返回 ${resp.status}`);
 
-  const reader = resp.body.getReader();
-  const decoder = new TextDecoder();
-  let buffer = '';
-  let done_events = false; // 收到 [DONE] 后就只把剩余字节读完，不再解析
+  const controller = new AbortController();
+  let idleTimer = null;
+  let stalled = false;
+  const keepAlive = () => {
+    clearTimeout(idleTimer);
+    idleTimer = setTimeout(() => {
+      stalled = true;
+      controller.abort();
+    }, STREAM_IDLE_MS);
+  };
 
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    buffer += decoder.decode(value, { stream: true });
+  try {
+    const resp = await fetch('/api/chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+      signal: controller.signal,
+    });
+    if (!resp.ok || !resp.body) throw new Error(`服务返回 ${resp.status}`);
 
-    let cut;
-    while ((cut = buffer.indexOf('\n\n')) >= 0) {
-      const chunk = buffer.slice(0, cut);
-      buffer = buffer.slice(cut + 2);
-      if (done_events) continue;
-      const line = chunk.split('\n').find((l) => l.startsWith('data:'));
-      if (!line) continue;
-      const payload = line.slice(5).trim();
-      if (payload === '[DONE]') {
-        done_events = true;
-        continue;
-      }
-      try {
-        onEvent(JSON.parse(payload));
-      } catch (err) {
-        /* 半截 JSON，忽略 */
+    const reader = resp.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    let done_events = false; // 收到 [DONE] 后就只把剩余字节读完，不再解析
+
+    keepAlive();
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      keepAlive();
+      buffer += decoder.decode(value, { stream: true });
+
+      let cut;
+      while ((cut = buffer.indexOf('\n\n')) >= 0) {
+        const chunk = buffer.slice(0, cut);
+        buffer = buffer.slice(cut + 2);
+        if (done_events) continue;
+        const line = chunk.split('\n').find((l) => l.startsWith('data:'));
+        if (!line) continue;
+        const payload = line.slice(5).trim();
+        if (payload === '[DONE]') {
+          done_events = true;
+          continue;
+        }
+        try {
+          onEvent(JSON.parse(payload));
+        } catch (err) {
+          /* 半截 JSON，忽略 */
+        }
       }
     }
+  } catch (err) {
+    if (stalled) throw new Error('这条回复断在半路了喵（网络波动），再发一次就好');
+    throw err;
+  } finally {
+    clearTimeout(idleTimer);
   }
 }
 
@@ -443,6 +471,41 @@ function handleEvent(turn, event) {
       break;
   }
 }
+
+/* ---------------- 回到前台重连 ----------------
+   手机上切后台再切回来，浏览器/系统常年会把之前的连接悄悄掐掉，页面就卡在死状态。
+   回到前台先探一下服务还在不在：连着就把状态改回「在线喵」，连不上就再试几次，
+   实在不行才提示刷新。正在跑的那条流有它自己的静默计时器兜底，这里不去打扰。 */
+
+const RECONNECT_TRIES = 3;
+const RECONNECT_WAIT_MS = 800;
+
+async function reachable() {
+  const resp = await fetch('/api/ping', { cache: 'no-store' });
+  return resp.ok;
+}
+
+async function resume() {
+  if (document.visibilityState !== 'visible') return;
+  for (let i = 0; i < RECONNECT_TRIES; i += 1) {
+    try {
+      if (await reachable()) {
+        if (!busy) statusEl.textContent = '在线喵';
+        return;
+      }
+    } catch (err) {
+      /* 没连上，接着试 */
+    }
+    statusEl.textContent = '重连中喵…';
+    await new Promise((resolve) => setTimeout(resolve, RECONNECT_WAIT_MS));
+  }
+  statusEl.textContent = '连不上服务喵，刷新一下吧';
+}
+
+document.addEventListener('visibilitychange', resume);
+window.addEventListener('online', resume);
+// pageshow 每次加载都会触发，只有从 bfcache 里捞回来的那次才需要探活
+window.addEventListener('pageshow', (e) => { if (e.persisted) resume(); });
 
 /* ---------------- 发送 ---------------- */
 

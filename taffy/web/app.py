@@ -58,6 +58,12 @@ def index():
     return FileResponse(os.path.join(STATIC_DIR, "index.html"))
 
 
+@app.get("/api/ping")
+def ping():
+    """前端从后台切回来时探活用，不碰会话。"""
+    return {"ok": True}
+
+
 @app.post("/api/session")
 def new_session():
     """开一个新会话，返回它的 id。"""
