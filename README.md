@@ -30,6 +30,7 @@ Taffy-Agent/
 │   │   ├── sticker.py       # send_sticker
 │   │   ├── forensics.py     # 数字取证：哈希 / 类型识别 / 字符串 / 雕复 / 元数据
 │   │   ├── asm_sim.py       # asm_sim：小型 16 位 CPU 模拟器
+│   │   ├── asm86.py         # asm86：8086/8088 实模式汇编仿真器
 │   │   ├── mcu.py           # mcu_calc：单片机外设计算 + 校验
 │   │   ├── logic.py         # logic_sim：数字逻辑仿真（门电路 / 真值表 / D 触发器）
 │   │   ├── numconv.py       # number_convert：进制 / 补码 / IEEE754 / 位运算
@@ -156,6 +157,7 @@ python -m taffy.web
 | `carve_files` | 按文件头尾签名雕复出内嵌 / 被删的图片、PDF、压缩包 |
 | `file_metadata` | MACB 时间线 + PDF / JPEG EXIF 元数据 |
 | `asm_sim` | 在小型 16 位 CPU 上跑汇编，看寄存器 / 标志位 / 内存，可出逐步 trace |
+| `asm86` | 8086 / 8088 实模式汇编仿真：跑 MASM 风格源码，看寄存器 / 标志位 / 内存 / 输出 / 总线周期 |
 | `mcu_calc` | 单片机外设计算：波特率、定时器、ADC、分压、PWM、I2C 地址、CRC、RC |
 | `logic_sim` | 数字逻辑仿真：门级网表算输出 / 列真值表，D 触发器按时钟跑周期 |
 | `number_convert` | 进制互转、补码、IEEE754 位型、位运算置位 / 清位 / 测位 |
@@ -166,7 +168,7 @@ python -m taffy.web
 
 ## 工程计算与教学仿真
 
-这五个工具（`asm_sim` / `mcu_calc` / `logic_sim` / `number_convert` / `sci_calc`）都是纯标准库、纯算术，不联网、不起子进程，跨平台，专门覆盖塔菲会的那几个方向。
+这六个工具（`asm_sim` / `asm86` / `mcu_calc` / `logic_sim` / `number_convert` / `sci_calc`）都是纯标准库、纯算术，不联网、不起子进程，跨平台，专门覆盖塔菲会的那几个方向。
 
 **`asm_sim`**——自带的 16 位 CPU。寄存器 `R0`~`R7`，标志位 `Z/N/C`，内存 256 个字（指令和数据共用），数值按 16 位回绕。指令集：
 
@@ -180,6 +182,35 @@ DW 1,2,3       DS 4
 ```
 
 一行一条，`;` / `#` 后面是注释，`loop:` 定义标签，数支持十进制和 `0x` / `0b` / `0o`。数据写在 `HALT` 后面，免得被当指令执行。`trace=true` 会给逐步执行过程（每步的寄存器变化）。
+
+**`asm86`**——8086 / 8088 实模式汇编仿真器，跟上面那个自带 CPU 不是一回事：这个认的是真·x86 汇编。喂一段 MASM 风格的源码，它两遍汇编后直接跑，返回寄存器（`AX`~`DI`、`CS`/`DS`/`SS`/`ES`/`IP`/`SP`）、九个标志位（`CF`/`PF`/`AF`/`ZF`/`SF`/`OF`/`IF`/`DF`/`TF`）、有内容的和改过的内存、程序输出，以及**估算的总线周期**（说明这是估算值，不是精确机器码长度）。
+
+- 认 MASM 常见写法：`SEGMENT`/`ENDS`、`ASSUME`、`PROC`/`ENDP`、`END 入口`、`DB`/`DW`/`DD`、`DUP`、`EQU`、`ORG`，段名还能用 `@DATA` 这么引；也支持完全不带段的裸程序，`.MODEL` / `.STACK` / `.DATA` / `.CODE` 会被忽略。
+- 数字字面量认 `123` / `0FFH` / `1010B` / `0x1F` 这几种写法；指令覆盖 `MOV`/算术/逻辑/移位/乘除、`CMP`/`TEST` 和各种条件跳转、`LOOP`、`CALL`/`RET`、`PUSH`/`POP`、`CBW`/`CWD`/`XLAT`，以及 `MOVSB`/`CMPSB`/`SCASB` 这类字符串指令（带 `REP`/`REPE`/`REPNE`）。
+- 寻址支持 `[BX+SI+4]`、`NUMS[BX+SI]`、`BYTE PTR`/`WORD PTR`、段超越前缀 `DS:`/`ES:`。
+- 中断内置实现：`INT 21H`（`09H` 打印 `$` 结尾串、`02H` 打字符、`01H` 读键、`0AH` 读行、`4CH` 退出）和 `INT 10H` 的几个功能；没实现的中断会明确说没实现，不会瞎猜。
+- `cpu` 选 `"8088"` 就按 8 位外部数据总线折算取指周期（`8086` 是 16 位总线），指令集两者完全一样。`stdin` 可以喂给 `01H` / `0AH`，`trace=true` 出逐步执行过程。
+
+```asm
+; 8086 Hello World（MASM 全框架写法）
+.MODEL SMALL
+.STACK 100H
+DATA SEGMENT
+    MSG DB 'Hello, Taffy!$'
+DATA ENDS
+CODE SEGMENT
+    ASSUME CS:CODE, DS:@DATA
+START:
+    MOV AX, @DATA
+    MOV DS, AX
+    MOV AH, 09H
+    LEA DX, MSG
+    INT 21H
+    MOV AX, 4C00H
+    INT 21H
+CODE ENDS
+END START
+```
 
 **`logic_sim`**——门级网表，一行一个门：
 
@@ -344,7 +375,7 @@ JSON 不合法：Expecting ':' delimiter（第 3 行第 7 列）
 
 ## 人设提示词
 
-在 [config.py](file:///f:/新建文件夹/Taffy-Agent/taffy/config.py) 的 `SYSTEM_PROMPT`，一共 24 条。除了说话风格，几条硬规矩是：
+在 [config.py](file:///f:/新建文件夹/Taffy-Agent/taffy/config.py) 的 `SYSTEM_PROMPT`，一共 25 条。除了说话风格，几条硬规矩是：
 
 - 代码必须完整写进回答里（workspace 只是缓存，不是交付物），跑通后删掉临时文件；
 - 需求落在她会的那几个方向（含写代码 / 调试 / 排错 / 选型）时，先 `search_knowledge` 查知识库里有没有现成的方案、题解、模板、教材写法，有就参考着来并标出处，实在沾不上边才从零想；
@@ -355,7 +386,7 @@ JSON 不合法：Expecting ':' delimiter（第 3 行第 7 列）
 - 拿到链接用 `open_url` 读原文再回答，打不开就直说，不许瞎编；
 - 除了算法题，嵌入式 / 单片机 / 物联网 / 计算机组成原理 / 数字取证也答，这几个方向先查知识库教材原文再回（取证那几本是英文的，提示里让它用英文关键词检索）；
 - 数字取证有专门工具：先 `identify_file` 看是什么、`hash_file` 固定哈希，再按需 `extract_strings` / `carve_files` / `file_metadata` 深挖，结论要带上偏移量 / 哈希 / 时间戳；分析完不许删雏草姬放进来的样本；
-- 工程计算和教学仿真别硬算，该用 `asm_sim` / `mcu_calc` / `logic_sim` / `number_convert` 就用（寄存器怎么配、位型长什么样、电路输出是几、汇编跑出来什么，都直接算给雏草姬看）；
+- 工程计算和教学仿真别硬算，该用 `asm_sim` / `asm86` / `mcu_calc` / `logic_sim` / `number_convert` 就用（寄存器怎么配、位型长什么样、电路输出是几、汇编跑出来什么，都直接算给雏草姬看；8086 / 8088 汇编用 `asm86` 实跑）；
 - 纯数学运算别硬算、也别为算个数去 `write_file` + `run_code` 绕一圈，直接交给 `sci_calc`（默认 50 位有效数字，最多 1000 位，整数是精确大数）；
 - 正则 / 差异 / JSON 这类文本活儿也别专门写代码，用 `regex_test` / `diff_text` / `json_tool`（写正则、抠日志、比配置、取值、校验都用它们；`regex_test` 会拦嵌套量词防回溯卡死）；
 - 能看图：雏草姬发的图片当轮有效、看完即清，图里的信息要当轮抄进回答，下一轮不许假装还记得。

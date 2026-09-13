@@ -4,11 +4,11 @@
 """
 import json
 
-from . import (asm_sim, basics, calc, files, forensics, kb, logic, mcu, numconv,
-               runner, search, sticker, text)
+from . import (asm86, asm_sim, basics, calc, files, forensics, kb, logic, mcu,
+               numconv, runner, search, sticker, text)
 
 _MODULES = (basics, kb, search, files, forensics, runner, sticker,
-            asm_sim, mcu, logic, numconv, calc, text)
+            asm_sim, asm86, mcu, logic, numconv, calc, text)
 
 TOOLS = []
 TOOL_MAP = {}
