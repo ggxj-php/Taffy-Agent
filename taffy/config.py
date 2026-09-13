@@ -21,8 +21,16 @@ BASE_URL = "https://api.deepseek.com/v1"
 MODEL = "deepseek-flash"
 
 # 发图片时用的模型。不是每个模型都吃图片（有的会直接 400），所以单独留个口子，
-# 默认跟聊天模型一致。两个都能在网页后台 /admin 里改，改完立刻生效。
+# 默认跟聊天模型一致。
 VISION_MODEL = MODEL
+
+# 聊天和图片是两套独立的连接：可以聊天用 GLM、发图用 DeepSeek，模型名、key、
+# 接口地址各配各的，互不影响（图片那套不配就用下面的默认值，跟聊天那套无关）。
+# 平时都在网页后台 /admin 里改，改完立刻生效；想在 .env 里配也行，加这两个：
+#   VISION_API_KEY=sk-图片那家的key
+#   VISION_BASE_URL=https://图片那家的地址/v1
+VISION_API_KEY = os.environ.get("VISION_API_KEY", "").strip() or API_KEY
+VISION_BASE_URL = os.environ.get("VISION_BASE_URL", "").strip() or BASE_URL
 
 # 单次回复的最大输出 token 数。带思考的模型（deepseek 这类）思维链也吃这个额度：
 # 复杂问题上思考一开，2048 / 4096 很容易被思考吃光，正文一个字都轮不到，表现就是

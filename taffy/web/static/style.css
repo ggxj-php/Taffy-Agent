@@ -562,6 +562,14 @@ body.admin .card h2 {
   font-size: 15px;
 }
 
+body.admin .card h3.sub {
+  margin: 16px 0 10px;
+  font-size: 13px;
+  color: var(--pink-deep);
+}
+
+body.admin .card h3.sub:first-of-type { margin-top: 4px; }
+
 body.admin .card label {
   display: block;
   margin-bottom: 10px;

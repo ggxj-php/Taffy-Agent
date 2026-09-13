@@ -77,15 +77,22 @@ class TaffyAgent:
         else:
             self.messages.append({"role": "user", "content": user_input})
 
-        # 带图这一轮走图片模型，纯文字走聊天模型；两个模型在后台能分开配。
-        # 工具循环里图片还在历史里，所以整轮都用同一个模型，不会中途换来换去。
-        model = settings.model_for(vision=image_slot is not None)
+        # 带图这一轮整套走图片那套配置（模型 + key + 接口地址），纯文字走聊天那套，
+        # 两套在后台能分开配（比如聊天 GLM、图片 DeepSeek）。
+        # 工具循环里图片还在历史里，所以整轮都用同一套，不会中途换来换去。
+        vision = image_slot is not None
+        model = settings.model_for(vision=vision)
+        api_key = settings.key_for(vision=vision)
+        base_url = settings.base_url_for(vision=vision)
 
         try:
             for _ in range(MAX_ROUNDS):
                 message = None
                 try:
-                    for kind, payload in stream_chat(_sendable(self.messages), TOOLS, model):
+                    for kind, payload in stream_chat(
+                        _sendable(self.messages), TOOLS, model,
+                        api_key=api_key, base_url=base_url,
+                    ):
                         if kind == "message":
                             message = payload
                         elif kind == "thinking":

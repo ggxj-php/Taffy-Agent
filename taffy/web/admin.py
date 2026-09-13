@@ -87,8 +87,14 @@ def _state():
         "model": settings.chat_model(),
         "vision_model": settings.vision_model(),
         "model_history": settings.model_history(),
-        # key 本身不回给前端，只说它是从哪来的：admin（后台配的）/ env（.env 里的）
-        "key_source": settings.key_source(),
+        # key 本身不回给前端，只说它是从哪来的：admin（后台配的）/ env（.env 里的）。
+        # 接口地址不是秘密，直接把当前生效的值给出去，页面拿它当占位提示。
+        "chat_key_source": settings.key_source(vision=False),
+        "vision_key_source": settings.key_source(vision=True),
+        "chat_base_url": settings.chat_base_url(),
+        "vision_base_url": settings.vision_base_url(),
+        "chat_base_source": settings.base_source(vision=False),
+        "vision_base_source": settings.base_source(vision=True),
     }
 
 
@@ -151,15 +157,29 @@ def save_models(req: ModelsRequest, request: Request):
     return _state()
 
 
-class KeyRequest(BaseModel):
-    api_key: str = ""
+class KeysRequest(BaseModel):
+    # 四个都留空表示「这项不改」——只想换聊天 key 时不用把图片那套重填一遍
+    chat_key: str = ""
+    vision_key: str = ""
+    chat_base_url: str = ""
+    vision_base_url: str = ""
 
 
-@router.post("/api/admin/key")
-def save_key(req: KeyRequest, request: Request):
+def _check_base(name, value):
+    value = value.strip()
+    if value and not value.startswith(("http://", "https://")):
+        raise HTTPException(status_code=400, detail=f"{name}的接口地址要以 http:// 或 https:// 开头喵")
+    return value
+
+
+@router.post("/api/admin/keys")
+def save_keys(req: KeysRequest, request: Request):
     _require(request)
-    key = req.api_key.strip()
-    if not key:
-        raise HTTPException(status_code=400, detail="key 不能留空喵")
-    settings.update_api_key(key)
+    chat_base = _check_base("聊天", req.chat_base_url)
+    vision_base = _check_base("图片", req.vision_base_url)
+    chat_key = req.chat_key.strip()
+    vision_key = req.vision_key.strip()
+    if not (chat_key or vision_key or chat_base or vision_base):
+        raise HTTPException(status_code=400, detail="一个都没填，那就先不动它喵")
+    settings.update_keys(chat_key, vision_key, chat_base, vision_base)
     return _state()

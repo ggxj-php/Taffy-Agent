@@ -4,40 +4,46 @@ import threading
 from openai import OpenAI
 
 from . import settings
-from .config import BASE_URL, MAX_TOKENS
+from .config import MAX_TOKENS
 
 _clients = {}
 _clients_lock = threading.Lock()
 
 
-def _client():
-    """按当前 key 建客户端。
+def _client(api_key, base_url):
+    """按 (key, 接口地址) 建客户端。
 
-    key 能在后台改，所以不能像以前那样在 import 时建一次就完事；
-    这里按 key 缓存，换 key 之后的第一次请求就会自动用新的，旧客户端顺手丢掉。
+    key 和地址都能在后台改，所以不能像以前那样在 import 时建一次就完事；
+    这里缓存起来，换 key / 换地址之后的第一次请求就会自动用新的。
+
+    聊天和图片可能是两家服务商（比如聊天 GLM、图片 DeepSeek），所以缓存键要带上
+    地址——两个客户端各留着，不用每轮来回重建。
     """
-    key = settings.api_key()
+    slot = (api_key, base_url)
     with _clients_lock:
-        client = _clients.get(key)
+        client = _clients.get(slot)
         if client is None:
-            client = OpenAI(api_key=key, base_url=BASE_URL)
-            _clients.clear()
-            _clients[key] = client
+            client = OpenAI(api_key=api_key, base_url=base_url)
+            _clients[slot] = client
         return client
 
 
-def stream_chat(messages: list, tools: list, model: str = ""):
+def stream_chat(messages: list, tools: list, model: str = "",
+                api_key: str = "", base_url: str = ""):
     """流式发一次请求，边收边吐增量。
 
     依次产出 ("thinking", 片段) / ("content", 片段)，最后产出
     ("message", 拼好的 assistant 消息)，那条消息可以直接塞回 messages。
 
-    model 留空就用后台配的聊天模型；带图的轮次由 core 传图片模型进来。
+    model / api_key / base_url 留空就用后台配的聊天那套；带图的轮次由 core
+    把图片那套的三个值传进来。
     """
     model = (model or "").strip() or settings.chat_model()
     settings.remember_model(model)
+    key = (api_key or "").strip() or settings.chat_key()
+    base = (base_url or "").strip() or settings.chat_base_url()
 
-    stream = _client().chat.completions.create(
+    stream = _client(key, base).chat.completions.create(
         model=model,
         messages=messages,
         tools=tools,

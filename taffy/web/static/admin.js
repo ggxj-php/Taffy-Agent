@@ -1,6 +1,6 @@
 'use strict';
 
-/* 后台管理前端：登录 -> 改模型 / 改 Key。
+/* 后台管理前端：登录 -> 改模型 / 改聊天和图片各自的接口与 Key。
    口令是按天算的，所以这里不存任何东西，cookie 交给浏览器自己管。 */
 
 const statusEl = document.getElementById('status');
@@ -15,9 +15,15 @@ const datalistEl = document.getElementById('model-list');
 const historyHintEl = document.getElementById('history-hint');
 const historyEl = document.getElementById('history-chips');
 const saveModelsEl = document.getElementById('save-models');
-const keyEl = document.getElementById('api-key');
-const keyStateEl = document.getElementById('key-state');
-const saveKeyEl = document.getElementById('save-key');
+const chatBaseEl = document.getElementById('chat-base');
+const chatKeyEl = document.getElementById('chat-key');
+const chatStateEl = document.getElementById('chat-state');
+const visionBaseEl = document.getElementById('vision-base');
+const visionKeyEl = document.getElementById('vision-key');
+const visionStateEl = document.getElementById('vision-state');
+const saveKeysEl = document.getElementById('save-keys');
+
+let lastState = null;
 
 function flash(text, ok) {
   statusEl.textContent = text;
@@ -55,15 +61,23 @@ function showLogin(message) {
 }
 
 function render(state) {
+  lastState = state;
   loginView.hidden = true;
   panelView.hidden = false;
   logoutEl.hidden = false;
 
   modelEl.value = state.model;
   visionEl.value = state.vision_model;
-  keyStateEl.textContent = state.key_source === 'admin'
-    ? '当前用的是后台设置过的 key。'
-    : '当前用的是 .env 里的 key（后台还没设过）。';
+
+  // 接口地址不是秘密，直接填进去给主人看着改；提交时没动过就不写盘
+  chatBaseEl.value = state.chat_base_url;
+  visionBaseEl.value = state.vision_base_url;
+  chatStateEl.textContent = state.chat_key_source === 'admin'
+    ? '当前 key 是后台设过的。'
+    : '当前 key 用的是 .env 里的。';
+  visionStateEl.textContent = state.vision_key_source === 'admin'
+    ? '当前 key 是后台单独给图片这套设过的。'
+    : '当前 key 用的是 .env 里给图片这套的默认值，跟聊天那套无关。';
 
   const history = state.model_history || [];
   datalistEl.innerHTML = '';
@@ -97,6 +111,12 @@ async function load(message) {
   } catch (err) {
     showLogin(err && err.status === 401 ? '先输口令喵' : err.message);
   }
+}
+
+/* 输入框里的值和当前生效的一样，就当没改过，不写盘 */
+function changed(el, current) {
+  const value = el.value.trim();
+  return value === current ? '' : value;
 }
 
 loginForm.addEventListener('submit', async (event) => {
@@ -139,22 +159,28 @@ saveModelsEl.addEventListener('click', async () => {
   }
 });
 
-saveKeyEl.addEventListener('click', async () => {
-  const apiKey = keyEl.value.trim();
-  if (!apiKey) {
-    flash('新 key 是空的，那就先不动它喵', false);
+saveKeysEl.addEventListener('click', async () => {
+  const body = {
+    chat_key: chatKeyEl.value.trim(),
+    vision_key: visionKeyEl.value.trim(),
+    chat_base_url: changed(chatBaseEl, lastState.chat_base_url),
+    vision_base_url: changed(visionBaseEl, lastState.vision_base_url),
+  };
+  if (!body.chat_key && !body.vision_key && !body.chat_base_url && !body.vision_base_url) {
+    flash('什么都没改喵', false);
     return;
   }
-  saveKeyEl.disabled = true;
+  saveKeysEl.disabled = true;
   try {
-    render(await api('/api/admin/key', { api_key: apiKey }));
-    keyEl.value = '';
-    flash('Key 换好了喵，下一条消息就用新的', true);
+    render(await api('/api/admin/keys', body));
+    chatKeyEl.value = '';
+    visionKeyEl.value = '';
+    flash('接口设置存好了喵，下一条消息就生效', true);
   } catch (err) {
     if (err.status === 401) showLogin(err.message);
     else flash(err.message, false);
   } finally {
-    saveKeyEl.disabled = false;
+    saveKeysEl.disabled = false;
   }
 });
 

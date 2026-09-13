@@ -39,10 +39,10 @@
   <section id="panel-view" hidden>
     <div class="card">
       <h2>模型</h2>
-      <label>聊天模型（纯文字）
+      <label>聊天模型（纯文字那几轮）
         <input id="model" list="model-list" placeholder="deepseek-flash" autocomplete="off">
       </label>
-      <label>图片模型（收到图片那一轮用）
+      <label>图片模型（消息里带图片的那一轮）
         <input id="vision-model" list="model-list" placeholder="deepseek-flash" autocomplete="off">
       </label>
       <datalist id="model-list"></datalist>
@@ -52,14 +52,34 @@
     </div>
 
     <div class="card">
-      <h2>API Key</h2>
-      <p class="hint" id="key-state"></p>
-      <label>新的 Key
-        <input type="password" id="api-key" placeholder="留空不改动；填了就覆盖"
+      <h2>接口（聊天 / 图片各一套）</h2>
+
+      <h3 class="sub">聊天</h3>
+      <label>接口地址
+        <input id="chat-base" autocomplete="off">
+      </label>
+      <label>Key
+        <input type="password" id="chat-key" placeholder="留空不改动；填了就覆盖"
                autocomplete="new-password">
       </label>
-      <button type="button" id="save-key">保存 Key</button>
-      <p class="hint">存下来立刻生效，不用重启。当前 key 不回显，也不显示头尾。</p>
+      <p class="hint" id="chat-state"></p>
+
+      <h3 class="sub">图片</h3>
+      <label>接口地址
+        <input id="vision-base" autocomplete="off">
+      </label>
+      <label>Key
+        <input type="password" id="vision-key" placeholder="留空不改动；填了就覆盖"
+               autocomplete="new-password">
+      </label>
+      <p class="hint" id="vision-state"></p>
+
+      <button type="button" id="save-keys">保存接口设置</button>
+      <p class="hint">
+        两套互相独立：聊天用 GLM、图片用 DeepSeek 也行，各填各的 key 和地址。
+        输入框留空表示「这项不改」，当前生效的值写在上面那行提示里。<br>
+        存下来立刻生效不用重启；key 不回显，也不显示头尾。
+      </p>
     </div>
   </section>
 

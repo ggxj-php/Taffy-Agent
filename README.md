@@ -12,10 +12,10 @@
 Taffy-Agent/
 ├── agent.py                 # 终端入口：python agent.py
 ├── .env                     # 密钥（已 gitignore，不进仓库）
-├── admin.json               # 后台改过的模型 / key（已 gitignore，改过才生成）
+├── admin.json               # 后台改过的模型 / key / 接口地址（已 gitignore，改过才生成）
 ├── taffy/
 │   ├── config.py            # 模型、运行参数、人设提示词
-│   ├── settings.py          # 后台可改的配置（模型、key），覆盖 .env
+│   ├── settings.py          # 后台可改的配置（模型、key、接口地址），覆盖 .env
 │   ├── sandbox.py           # 工作区沙箱：路径越界检查
 │   ├── llm.py               # 模型接入层
 │   ├── core.py              # TaffyAgent：对话历史 + 工具循环
@@ -87,6 +87,9 @@ pip install openai requests python-dotenv pypdf python-docx jieba numpy \
 DEEPSEEK_API_KEY=sk-你的key
 CXX=g++.exe路径
 ADMIN_PASSWORD_PREFIX=你自己定的一串
+# 下面两行可选，只有「聊天 / 看图分两家服务商」时才要
+VISION_API_KEY=sk-图片那家的key
+VISION_BASE_URL=https://图片那家的地址/v1
 ```
 
 没有 key（或没建这个文件）时，程序启动会直接报错提醒，不会静默失败。
@@ -94,6 +97,8 @@ ADMIN_PASSWORD_PREFIX=你自己定的一串
 `CXX` 是可选的，只在 `run_code` 跑 `.cpp` / `.c` 时用到：填 g++ 的绝对路径就行，`.c` 会自动用同目录的 `gcc`。不填就按 PATH 里的 `g++` 找。**不用把它加进系统 PATH**——那样会影响全局，还要重启终端才生效，配在项目里更省事。
 
 `ADMIN_PASSWORD_PREFIX` 是网页后台 `/admin` 登录口令的前缀（详见「后台管理」）：前缀拼上当天日期就是明文口令，服务端比对 md5。不配就登不进后台。
+
+`VISION_API_KEY` / `VISION_BASE_URL` 也是可选的，只给「消息里带图片的那一轮」用：想让聊天和看图走两家服务商（比如聊天用 GLM、看图用 DeepSeek），就在这里分开配。不填就跟着 `DEEPSEEK_API_KEY` 走。**平时在后台 `/admin` 里改更方便，改完不用重启**。
 
 `SEARCH_PROXY` 也是可选的，控制 `web_search` 走不走代理，默认**直连**（百度这类国内引擎走代理反而容易被拒）。部署到别的机器上搜不出东西时，先看工具返回的提示，它会写明每家引擎是「连不上」还是「没抠到结果（页面 xx 字节）」：如果各家都连不上，说明是网络出不去，把这项设成 `system`（跟随系统 / 环境变量里的代理）或者直接填地址就行。
 
@@ -159,11 +164,13 @@ python -m taffy.web
   代码里**故意不留默认前缀**——留了就等于把口令公开，谁都能算出当天值。不配的话登录会直接拒绝并提示你去配。算口令的逻辑在 `taffy/web/admin.py` 的 `expected_password()`：想换算法改那个函数，想换口令改 `.env` 里那一行再重启。登录时填拼出来的**明文**，服务端算 md5 比对，不存明文。
 - **登录状态**：成功后发一个随机 token 的 cookie（HttpOnly），12 小时有效；服务重启后要重新登。
 - **能改什么**：
-  - **聊天模型 / 图片模型分开设**：纯文字那一轮走前者，消息里带图那一轮走后者。两个默认都是 `deepseek-flash`。
-  - **API Key**：填新的就覆盖。**当前 key 不回显**，页面只告诉你它来自后台设置还是 `.env`。
-  - **历史模型**：用过的模型名会记下来（去重，最多 30 条），点一下填进输入框。
+  - **聊天和图片是两套独立配置**：模型、Key、接口地址各一套。纯文字那几轮走聊天那套，消息里带图片的那轮走图片那套。所以可以**聊天用 GLM、看图用 DeepSeek**，两边互不影响；两套的默认模型都是 `deepseek-flash`。
+  - **接口地址**（`base_url`）也分两套，换服务商要连地址一起改（DeepSeek 是 `https://api.deepseek.com/v1`，GLM 是 `https://open.bigmodel.cn/api/paas/v4`）。
+  - **Key**：填新的就覆盖。**当前 key 不回显、不显示头尾**，页面只告诉你它是后台设过的还是 `.env` 里的。输入框留空表示「这项不改」。
+  - **没单独配的那套**就回落到 `config.py` 里的 `VISION_MODEL` / `VISION_API_KEY` / `VISION_BASE_URL`（默认跟 `DEEPSEEK_API_KEY` 同一家）。
+  - **历史模型**：用过的模型名会记下来（去重，最多 30 条），点一下填进聊天模型的输入框。
 - **存哪**：项目根目录的 `admin.json`（已 gitignore——里面有明文 key，别提交）。没配过的项自动回落到 `.env` / `config.py`，所以这个文件删掉也不会坏。
-- **生效时机**：**立刻生效、不用重启**——模型和 key 都是每次请求现问的。
+- **生效时机**：**立刻生效、不用重启**——模型、key、接口地址都是每次请求现问的。
 
 ## 内置工具
 
