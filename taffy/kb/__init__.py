@@ -1,12 +1,20 @@
-"""知识库：对外是 search() 和 warmup()，索引在第一次用到时懒加载。
+"""知识库：对外是 search() / warmup() / stats()，索引在第一次用到时懒加载。
 
 索引是进程内单例，只建一次。运行中往 knowledge/ 里加了文件不会自动生效，
 重启一下就好。
+
+检索走两路（词匹配 + 向量），细节见 index.py。索引在后台线程里建：建好之前
+search() 拿到的是个半成品，会先只用词匹配顶着，向量算好了下一问就自动用上。
 """
+import threading
+
 from ..config import KB_TOP_K
 from .index import KnowledgeBase
 
 _kb = None
+_lock = threading.Lock()
+# 后台页面拿它显示索引进度：还在建吗、向量算了多少、有没有出错
+_stats = {"building": False, "chunks": 0, "vectors": 0, "error": ""}
 
 
 def _get():
@@ -19,7 +27,27 @@ def _get():
 
 def warmup():
     """提前把索引建好，别让第一个提问卡在建索引上。"""
-    _get()
+    with _lock:
+        _stats["building"] = True
+    try:
+        kb = _get()
+        with _lock:
+            _stats["chunks"] = len(kb.chunks)
+            _stats["vectors"] = kb.vector_count()
+            _stats["error"] = kb.vector_error
+    except Exception as exc:
+        with _lock:
+            _stats["error"] = f"{type(exc).__name__}: {exc}"
+        raise
+    finally:
+        with _lock:
+            _stats["building"] = False
+
+
+def stats():
+    """索引状态，给网页后台看的。"""
+    with _lock:
+        return dict(_stats)
 
 
 def search(query, top_k=KB_TOP_K):
@@ -36,8 +64,9 @@ def search(query, top_k=KB_TOP_K):
     if not hits:
         return f"知识库里没找到和「{query}」相关的内容。"
 
+    # 不打分数：两路融合后的分数是个很小的名次分，写出来反而会让人误判相关性
     blocks = []
-    for score, chunk in hits:
+    for _score, chunk in hits:
         page = f" 第 {chunk['page']} 页" if chunk.get("page") else ""
-        blocks.append(f"【{chunk['source']}{page}】(score {score:.2f})\n{chunk['text']}")
+        blocks.append(f"【{chunk['source']}{page}】\n{chunk['text']}")
     return "\n\n".join(blocks)

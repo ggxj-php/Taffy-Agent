@@ -1,4 +1,4 @@
-"""后台管理：登录、改模型、改 Key。挂在 /admin 和 /api/admin/* 底下。
+"""后台管理：登录、改模型、改 Key、改知识库的向量模型。挂在 /admin 和 /api/admin/* 底下。
 
 口令是按天变的：md5(.env 里的 ADMIN_PASSWORD_PREFIX + 当天日期 YYMMDD)，日期按
 UTC+8 算——服务器时钟是 UTC 也不会差一天。口令只在内存里比对，不落盘、不写日志。
@@ -21,7 +21,8 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
 from .. import settings
-from ..config import ADMIN_PASSWORD_PREFIX
+from ..config import ADMIN_PASSWORD_PREFIX, EMBED_DIM
+from ..kb import stats as kb_stats
 
 router = APIRouter()
 
@@ -95,6 +96,13 @@ def _state():
         "vision_base_url": settings.vision_base_url(),
         "chat_base_source": settings.base_source(vision=False),
         "vision_base_source": settings.base_source(vision=True),
+        # 知识库向量检索那一路（跟聊天 / 图片两套没关系，是检索用的）
+        "embed_model": settings.embed_model(),
+        "embed_base_url": settings.embed_base_url(),
+        "embed_key_source": settings.embed_key_source(),
+        "embed_base_source": settings.embed_base_source(),
+        "embed_dim": EMBED_DIM,
+        "kb": kb_stats(),
     }
 
 
@@ -182,4 +190,22 @@ def save_keys(req: KeysRequest, request: Request):
     if not (chat_key or vision_key or chat_base or vision_base):
         raise HTTPException(status_code=400, detail="一个都没填，那就先不动它喵")
     settings.update_keys(chat_key, vision_key, chat_base, vision_base)
+    return _state()
+
+
+class EmbedRequest(BaseModel):
+    embed_model: str = ""
+    embed_base_url: str = ""
+    embed_key: str = ""
+
+
+@router.post("/api/admin/embed")
+def save_embed(req: EmbedRequest, request: Request):
+    _require(request)
+    base = _check_base("向量模型", req.embed_base_url)
+    model = req.embed_model.strip()
+    key = req.embed_key.strip()
+    if not (model or base or key):
+        raise HTTPException(status_code=400, detail="一个都没填，那就先不动它喵")
+    settings.update_embed(model, base, key)
     return _state()

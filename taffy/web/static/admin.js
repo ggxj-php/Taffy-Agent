@@ -22,6 +22,13 @@ const visionBaseEl = document.getElementById('vision-base');
 const visionKeyEl = document.getElementById('vision-key');
 const visionStateEl = document.getElementById('vision-state');
 const saveKeysEl = document.getElementById('save-keys');
+const embedModelEl = document.getElementById('embed-model');
+const embedBaseEl = document.getElementById('embed-base');
+const embedKeyEl = document.getElementById('embed-key');
+const embedStateEl = document.getElementById('embed-state');
+const embedDimEl = document.getElementById('embed-dim');
+const kbStatusEl = document.getElementById('kb-status');
+const saveEmbedEl = document.getElementById('save-embed');
 
 let lastState = null;
 
@@ -79,6 +86,19 @@ function render(state) {
     ? '当前 key 是后台单独给图片这套设过的。'
     : '当前 key 用的是 .env 里给图片这套的默认值，跟聊天那套无关。';
 
+  // 向量模型：模型名和地址直接填出来给主人看着改，key 只说来源
+  embedModelEl.value = state.embed_model || '';
+  embedBaseEl.value = state.embed_base_url || '';
+  embedDimEl.textContent = state.embed_dim;
+  if (!state.embed_model || !state.embed_base_url) {
+    embedStateEl.textContent = '还没配全，知识库现在只用词匹配喵。';
+  } else if (state.embed_key_source === 'admin') {
+    embedStateEl.textContent = '当前 key 是后台设过的。';
+  } else {
+    embedStateEl.textContent = '当前 key 用的是 .env 里的。';
+  }
+  renderKb(state.kb);
+
   const history = state.model_history || [];
   datalistEl.innerHTML = '';
   historyEl.innerHTML = '';
@@ -112,6 +132,33 @@ async function load(message) {
     showLogin(err && err.status === 401 ? '先输口令喵' : err.message);
   }
 }
+
+/* 知识库索引状态那一行。建向量要好几分钟，所以单独抽出来，刷新时别碰输入框 */
+function renderKb(kb) {
+  if (!kb || (!kb.chunks && !kb.building)) {
+    kbStatusEl.textContent = '还没开始建喵（knowledge/ 里可能没文档）。';
+    return;
+  }
+  const parts = [];
+  if (kb.building) parts.push('正在建');
+  parts.push(`收进来 ${kb.chunks} 块`);
+  parts.push(kb.vectors
+    ? `其中 ${kb.vectors} 块带向量，两路检索都在用`
+    : '还没有向量，现在只用词匹配');
+  let text = `${parts.join('，')}。`;
+  if (kb.error) text += ` 最近一次向量调用出过错：${kb.error}`;
+  kbStatusEl.textContent = text;
+}
+
+/* 建索引可能要好几分钟，隔几秒刷一下那行状态（只改文字，不动输入框） */
+setInterval(async () => {
+  if (panelView.hidden) return;
+  try {
+    renderKb((await api('/api/admin/state')).kb);
+  } catch (err) {
+    /* 登录过期之类的问题交给下一次 load() 处理，这里不打扰 */
+  }
+}, 5000);
 
 /* 输入框里的值和当前生效的一样，就当没改过，不写盘 */
 function changed(el, current) {
@@ -181,6 +228,29 @@ saveKeysEl.addEventListener('click', async () => {
     else flash(err.message, false);
   } finally {
     saveKeysEl.disabled = false;
+  }
+});
+
+saveEmbedEl.addEventListener('click', async () => {
+  const body = {
+    embed_model: changed(embedModelEl, lastState.embed_model || ''),
+    embed_base_url: changed(embedBaseEl, lastState.embed_base_url || ''),
+    embed_key: embedKeyEl.value.trim(),
+  };
+  if (!body.embed_model && !body.embed_base_url && !body.embed_key) {
+    flash('什么都没改喵', false);
+    return;
+  }
+  saveEmbedEl.disabled = true;
+  try {
+    render(await api('/api/admin/embed', body));
+    embedKeyEl.value = '';
+    flash('向量模型存好了喵，重启服务后生效', true);
+  } catch (err) {
+    if (err.status === 401) showLogin(err.message);
+    else flash(err.message, false);
+  } finally {
+    saveEmbedEl.disabled = false;
   }
 });
 

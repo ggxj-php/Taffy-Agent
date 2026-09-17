@@ -16,6 +16,9 @@ import threading
 from .config import (
     API_KEY,
     BASE_URL,
+    EMBED_API_KEY,
+    EMBED_BASE_URL,
+    EMBED_MODEL,
     MODEL,
     PROJECT_ROOT,
     VISION_API_KEY,
@@ -53,6 +56,9 @@ def _load():
         "vision_key": str(raw.get("vision_key") or ""),
         "chat_base": str(raw.get("chat_base") or ""),
         "vision_base": str(raw.get("vision_base") or ""),
+        "embed_key": str(raw.get("embed_key") or ""),
+        "embed_base": str(raw.get("embed_base") or ""),
+        "embed_model": str(raw.get("embed_model") or ""),
         "model": str(raw.get("model") or ""),
         "vision_model": str(raw.get("vision_model") or ""),
         "model_history": [m for m in history if isinstance(m, str)] if isinstance(history, list) else [],
@@ -181,4 +187,44 @@ def update_keys(chat_key_new, vision_key_new, chat_base, vision_base):
             data["chat_base"] = chat_base
         if vision_base:
             data["vision_base"] = vision_base
+        _write(data)
+
+
+# ---------- 向量检索（embedding）----------
+# 知识库检索的第二路，见 kb/embed.py。这里只管存，用不用得上由 embed.enabled() 判断。
+
+def embed_model():
+    """知识库检索用的向量模型。"""
+    return _load()["embed_model"] or EMBED_MODEL
+
+
+def embed_base_url():
+    """向量模型的接口地址（任何 OpenAI 兼容的 /embeddings 都行）。"""
+    return _load()["embed_base"] or EMBED_BASE_URL
+
+
+def embed_key():
+    """向量模型的 key。"""
+    return _load()["embed_key"] or EMBED_API_KEY
+
+
+def embed_key_source():
+    """key 哪来的，后台拿来提示：admin（后台配的）/ env（.env 里的）。"""
+    return "admin" if _load()["embed_key"] else "env"
+
+
+def embed_base_source():
+    return "admin" if _load()["embed_base"] else "default"
+
+
+def update_embed(model, base_url, key):
+    """改向量模型 / 地址 / key。留空表示「这项不改」。"""
+    with _lock:
+        data = _load()
+        if model:
+            data["embed_model"] = model
+        if base_url:
+            data["embed_base"] = base_url
+        if key:
+            data["embed_key"] = key
         _write(data)

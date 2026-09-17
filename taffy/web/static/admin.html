@@ -81,6 +81,33 @@
         存下来立刻生效不用重启；key 不回显，也不显示头尾。
       </p>
     </div>
+
+    <div class="card">
+      <h2>向量模型（知识库检索用）</h2>
+      <label>模型
+        <input id="embed-model" placeholder="qwen3.7-text-embedding-flash" autocomplete="off">
+      </label>
+      <label>接口地址
+        <input id="embed-base" placeholder="https://dashscope.aliyuncs.com/compatible-mode/v1"
+               autocomplete="off">
+      </label>
+      <label>Key
+        <input type="password" id="embed-key" placeholder="留空不改动；填了就覆盖"
+               autocomplete="new-password">
+      </label>
+      <button type="button" id="save-embed">保存向量模型</button>
+      <p class="hint" id="embed-state"></p>
+      <p class="hint">
+        这是给知识库检索用的，跟上面聊天 / 图片那两套没关系。<br>
+        检索是两路一起用的：<b>词匹配</b>管精确词（STM32F103、I2C、IEEE754 这种），
+        <b>向量</b>管语义和跨语言——中文提问能搜到英文教材，靠的就是这一路。<br>
+        任何 OpenAI 兼容的 <code>/embeddings</code> 接口都能用；留空就只用词匹配（也能用，
+        只是中文问题搜不到英文书）。<br>
+        索引维度按 <code>EMBED_DIM</code> 校验（当前 <span id="embed-dim">?</span> 维），
+        对不上会直接报错。<b>改完要重启服务才生效</b>，而且会重新向量化一遍全库。
+      </p>
+      <p class="hint">索引状态：<span id="kb-status">还没开始建喵…</span></p>
+    </div>
   </section>
 
 </main>
