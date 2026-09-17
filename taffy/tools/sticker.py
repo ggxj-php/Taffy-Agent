@@ -13,8 +13,9 @@ SPECS = [
             "name": "send_sticker",
             "description": (
                 "给雏草姬发一张塔菲表情包（真实图片，会直接显示在聊天里）。"
-                "想表达情绪时优先用这个，不要用 emoji 或颜文字代替。"
-                "情绪到位就主动发一张，别每句话都发。"
+                "每条回复都至少要发一张，在 happy / think / confused / proud / cry / "
+                "angry / sleepy / love 里挑最贴合当下心情的；情绪变化大可以多发几张。"
+                "只有这个工具发出来的是真表情包，emoji 和颜文字都不算，别拿那些凑数。"
             ),
             "parameters": {
                 "type": "object",
