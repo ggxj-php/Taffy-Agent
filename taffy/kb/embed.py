@@ -14,8 +14,11 @@ import requests
 from .. import settings
 from ..config import EMBED_DIM
 
-# 一次请求带多少条。百炼的文档写单次最多 20 行，留点余量；实测 25 也收。
-_BATCH = 20
+# 一次请求带多少条。各家的「单次最大行数」不一样：百炼 qwen3.7 系列收 20 行，
+# text-embedding-v4 / v3 只收 10 行，v1 / v2 是 25 行。先按 _BATCH_MAX 发，接口嫌多
+# 就自动砍半重发（见 embed_texts），砍出来的安全值记在 _batch 里，一个进程只碰一次壁。
+_BATCH_MAX = 20
+_batch = _BATCH_MAX
 # 同时开几个请求。全库 8.5 万块要发 4000 多次请求，串行发太慢；4 路既快又不容易被限流。
 _WORKERS = 4
 _TIMEOUT = 60
@@ -24,6 +27,10 @@ _RETRIES = 3
 
 class EmbedError(RuntimeError):
     """向量化失败。调用方接住它、把向量那一路关掉就行，别让整个索引建不起来。"""
+
+
+class _TooManyItems(EmbedError):
+    """一次塞的行数超过服务商上限。内部信号，embed_texts 会砍半重试，不往上报。"""
 
 
 def enabled():
@@ -84,6 +91,11 @@ def _post(texts):
                         f"把 EMBED_DIM 改成 {got}，或者删掉 .cache/ 重建索引"
                     )
                 return vectors
+            if resp.status_code == 400 and len(texts) > 1:
+                # 多于一行的批次碰到 400，先当成「塞太多行了」——各家的上限不一样，
+                # 报错措辞也五花八门，让上层砍半重发比猜文案稳。砍到只剩一行还 400，
+                # 那就是这批内容本身有问题（比如单行 token 超长），如实报出去。
+                raise _TooManyItems(f"HTTP 400: {resp.text[:200]}")
             last = f"HTTP {resp.status_code}: {resp.text[:200]}"
         if attempt + 1 < _RETRIES:  # 限流 / 网络抖动，退避一下再试
             time.sleep(1.5 * (attempt + 1))
@@ -92,16 +104,27 @@ def _post(texts):
 
 
 def embed_texts(texts):
-    """把一批文本变成向量，顺序跟输入一致。"""
+    """把一批文本变成向量，顺序跟输入一致。
+
+    接口嫌一次给的行太多就自动砍半重发，并把砍出来的安全值记下来给后面用。
+    """
+    global _batch
     texts = list(texts)
     if not texts:
         return []
-    batches = [texts[i:i + _BATCH] for i in range(0, len(texts), _BATCH)]
-    if len(batches) == 1:
-        return _post(batches[0])
-    # map 按输入顺序返回结果，正好保证跟 batches 对齐
-    with ThreadPoolExecutor(max_workers=min(_WORKERS, len(batches))) as pool:
-        return [vector for chunk in pool.map(_post, batches) for vector in chunk]
+    while True:
+        batches = [texts[i:i + _batch] for i in range(0, len(texts), _batch)]
+        try:
+            if len(batches) == 1:
+                return _post(batches[0])
+            # map 按输入顺序返回结果，正好保证跟 batches 对齐
+            with ThreadPoolExecutor(max_workers=min(_WORKERS, len(batches))) as pool:
+                return [vector for chunk in pool.map(_post, batches) for vector in chunk]
+        except _TooManyItems:
+            # _post 只在多行的批次上抛这个，正常砍下去一定会收敛；留个兜底免得死循环
+            if _batch <= 1:
+                raise
+            _batch = max(1, _batch // 2)
 
 
 def embed_query(text):
