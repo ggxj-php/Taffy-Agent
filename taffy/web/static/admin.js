@@ -11,6 +11,7 @@ const loginForm = document.getElementById('login-form');
 const passwordEl = document.getElementById('password');
 const modelEl = document.getElementById('model');
 const visionEl = document.getElementById('vision-model');
+const translateEl = document.getElementById('translate-model');
 const datalistEl = document.getElementById('model-list');
 const historyHintEl = document.getElementById('history-hint');
 const historyEl = document.getElementById('history-chips');
@@ -75,6 +76,7 @@ function render(state) {
 
   modelEl.value = state.model;
   visionEl.value = state.vision_model;
+  translateEl.value = state.translate_model || '';
 
   // 接口地址不是秘密，直接填进去给主人看着改；提交时没动过就不写盘
   chatBaseEl.value = state.chat_base_url;
@@ -91,7 +93,7 @@ function render(state) {
   embedBaseEl.value = state.embed_base_url || '';
   embedDimEl.textContent = state.embed_dim;
   if (!state.embed_model || !state.embed_base_url) {
-    embedStateEl.textContent = '还没配全，知识库现在只用词匹配喵。';
+    embedStateEl.textContent = '还没配全，知识库现在只用原查询和英文检索词那两路喵。';
   } else if (state.embed_key_source === 'admin') {
     embedStateEl.textContent = '当前 key 是后台设过的。';
   } else {
@@ -143,8 +145,8 @@ function renderKb(kb) {
   if (kb.building) parts.push('正在建');
   parts.push(`收进来 ${kb.chunks} 块`);
   parts.push(kb.vectors
-    ? `其中 ${kb.vectors} 块带向量，两路检索都在用`
-    : '还没有向量，现在只用词匹配');
+    ? `其中 ${kb.vectors} 块带向量，三路检索都在用`
+    : '没有向量（词匹配 + 英文检索词照常用）');
   let text = `${parts.join('，')}。`;
   if (kb.error) text += ` 最近一次向量调用出过错：${kb.error}`;
   kbStatusEl.textContent = text;
@@ -191,12 +193,16 @@ saveModelsEl.addEventListener('click', async () => {
   const model = modelEl.value.trim();
   const vision = visionEl.value.trim();
   if (!model || !vision) {
-    flash('两个模型名都得填喵', false);
+    flash('聊天和图片的模型名都得填喵', false);
     return;
   }
   saveModelsEl.disabled = true;
   try {
-    render(await api('/api/admin/models', { model, vision_model: vision }));
+    render(await api('/api/admin/models', {
+      model,
+      vision_model: vision,
+      translate_model: translateEl.value.trim(),
+    }));
     flash('模型存好了喵，下一条消息就生效', true);
   } catch (err) {
     if (err.status === 401) showLogin(err.message);

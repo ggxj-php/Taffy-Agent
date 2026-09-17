@@ -3,18 +3,25 @@
 缓存按「单个文件」存，文件没动就直接复用上次的切块、分词和向量，只有新增 /
 修改 / 删除的文件才重新处理。
 
-检索走两路，再按名次融合（RRF）：
-  · 词匹配：自建稀疏倒排索引 + numpy 向量化打分，查询词只碰到包含它的那些块，
-    7 万块规模下 ~2ms。管精确词——STM32F103、I2C、IEEE754 这种。
-  · 向量：问题和原文都算成语义向量比远近（见 embed.py）。管跨语言——中文提问
-    要能命中英文教材，靠的就是这一路，光靠词匹配是零交集。
-向量那路没配、或者临时的接口挂了，自动退回只用词匹配，不影响可用。
+检索走几路，再按名次融合（RRF）：
+  · 原查询的词匹配：自建稀疏倒排索引 + numpy 向量化打分，查询词只碰到包含它的那些块，
+    7 万块规模下 ~2ms。管精确词——STM32F103、I2C、IEEE754 这种。这一路永远都在，
+    同语言的命中靠它。
+  · 英文检索词：中文提问先用模型写成一句英文关键词再查一遍（见 translate.py），
+    管跨语言——「内存取证」和 "memory forensics" 在词表上零交集，靠这一路才打得到
+    英文教材。不用向量模型、不花那份钱。这一路只在英文内容里找（中文块有原查询那一路
+    兜着，英文关键词落在它们身上纯是噪声）。
+  · 向量：问题和原文都算成语义向量比远近（见 embed.py）。要配 key，配了才有这一路。
+
+任何一路出问题（没配、接口挂了、返回的东西看不懂）都只是少一路，检索照常返回：
+英文那路退回原查询，向量那路退回纯词匹配，不影响可用。
 
 对外接口只有 KnowledgeBase.build() 和 KnowledgeBase.search() 两个方法。
 """
 import math
 import os
 import pickle
+import re
 
 import numpy as np
 
@@ -25,14 +32,15 @@ from ..config import (
     KB_CHUNK_SIZE,
     KB_SOURCE_WEIGHTS,
     KB_SPARSE_WEIGHT,
+    KB_TRANSLATE_WEIGHT,
     KB_VECTOR_WEIGHT,
     KNOWLEDGE_DIR,
 )
-from . import embed, loader
+from . import embed, loader, translate
 from .lexicon import expand
 
 # 缓存结构变了就把版本号加一，旧缓存会自动失效重建
-_CACHE_VERSION = 4
+_CACHE_VERSION = 6
 
 # BM25 参数：k1 控制词频饱和，b 控制长度归一化强度
 _K1 = 1.5
@@ -40,7 +48,7 @@ _B = 0.75
 # rank_bm25 的默认值，负 idf 会用 epsilon * 平均 idf 兜底
 _EPSILON = 0.25
 
-# 融合检索时，两路各取这么多候选再排，最后才挑前 top_k 个
+# 融合检索时，每一路各取这么多候选再排，最后才挑前 top_k 个
 _CANDIDATES = 100
 # RRF 的平滑常数。越大越不看重名次差异，60 是常用取值。
 _RRF_K = 60
@@ -71,26 +79,87 @@ about above after before during between through
 """.split())
 
 
+# 英文后缀还原表，长的排前面（先试 "ations" 再试 "s"）。只保留最常见的那些，
+# 具体用法和边界见 _stem()。
+_STEM_RULES = sorted(
+    (
+        ("ations", ""), ("ically", "ic"), ("ation", ""), ("ities", ""),
+        ("sses", "ss"), ("iness", "y"), ("ings", ""), ("edly", ""),
+        ("ance", ""), ("ence", ""), ("ness", ""), ("ment", ""), ("less", ""),
+        ("able", ""), ("ible", ""), ("ally", ""), ("ing", ""), ("ies", "y"),
+        ("ous", ""), ("ive", ""), ("ful", ""), ("ion", ""), ("ity", ""),
+        ("est", ""), ("ed", ""), ("ly", ""), ("er", ""),
+    ),
+    key=lambda rule: -len(rule[0]),
+)
+
+
+def _stem_once(token):
+    """砍一次后缀 / 复数，砍不动就原样返回。"""
+    for suffix, replacement in _STEM_RULES:
+        if token.endswith(suffix):
+            stem = token[:len(token) - len(suffix)] + replacement
+            if len(stem) >= 4:
+                return stem
+    # 复数：process 这种以 ss 结尾的不动，免得越砍越短
+    if token.endswith("s") and not token.endswith(("ss", "us", "is")) and len(token) - 1 >= 4:
+        return token[:-1]
+    return token
+
+
+def _stem(token):
+    """英文词干还原：让同一个词的不同词形落到同一个词上。
+
+    教材里同一个概念会以各种词形出现（forensic / forensics、encrypt / encryption /
+    encrypted），不还原就是「明明是一个词、字面对不上」，白丢分。中文、数字和缩写
+    （i2c、stm32f103）一律不碰——那些本来就没有词形变化。
+
+    规则保守：只砍常见后缀，砍完不足 4 个字符就放弃。不追求语言学上正确——乱砍会把
+    本来不相干的词并成一个，比不还原更糟。
+
+    反复砍到砍不动为止，不然词形不同的两个词会停在不同的地方：registers 只砍掉复数
+    停在 register，而 register 本身砍成 regist，同一个词反倒对不上（requirements
+    这类「复数 + 后缀」的词很常见，所以必须收敛）。
+    """
+    if len(token) < 5 or not token.isascii() or not token.isalpha():
+        return token
+    for _ in range(4):
+        shorter = _stem_once(token)
+        if shorter == token:
+            break
+        token = shorter
+    return token
+
+
 def _segment(text):
-    """切词：jieba 分词，英文统一转小写。jieba 首次调用要建词典缓存，所以延迟导入。
+    """切词：jieba 分词 -> 转小写 -> 丢功能词 -> 英文还原词干。jieba 首次调用要建词典
+    缓存，所以延迟导入。
 
     英文必须转小写：教材原文大小写混着来（"The Internet of Things"），不统一的话
     查询里的 internet 和索引里的 Internet 是两个不同的词，跨语言检索全落空。
     """
     import jieba
 
-    return [token.lower() for token in jieba.lcut(text) if _useful(token.lower())]
+    tokens = []
+    for piece in jieba.lcut(text):
+        token = piece.lower()
+        if _useful(token):
+            tokens.append(_stem(token))
+    return tokens
 
 
 def _query_terms(query):
     """把查询变成 [(词, 权重), ...]。
 
     原文分词权重 1.0；lexicon 按术语补进来的跨语言词打 _EXPAND_WEIGHT 折——中文
-    提问会自动带上英文术语，英文教材才可能被命中（反之亦然）。
+    提问会自动带上英文术语，英文教材才可能被命中（反之亦然）。补进来的词同样要过
+    _stem，不然索引里存的是还原过的词，两边对不上。
     """
     terms = {token: 1.0 for token in _segment(query)}
     for token in expand(query):
-        terms.setdefault(token, _EXPAND_WEIGHT)
+        token = _stem(token.lower())
+        if _useful(token):
+            terms.setdefault(token, _EXPAND_WEIGHT)
     return list(terms.items())
 
 
@@ -114,6 +183,21 @@ def _weight_of(rel_path):
         if key.startswith(prefix):
             return weight
     return 1.0
+
+
+# 判断一段是不是中文内容，见 _is_chinese()
+_CJK = re.compile(r"[\u3400-\u9fff]")
+_LETTER = re.compile(r"[A-Za-z\u3400-\u9fff]")
+
+
+def _is_chinese(text):
+    """这段内容是不是以中文写的（给英文检索那一路挡噪声用）。
+
+    判「有没有中文」不行——英文教材里偶尔也夹着一两个汉字（目录、术语对照），一刀切会
+    把整本书挡在英文检索之外。所以看比例：中文字符占「字母」的两成以上才算中文内容。
+    """
+    letters = len(_LETTER.findall(text))
+    return letters >= 20 and len(_CJK.findall(text)) * 5 >= letters
 
 
 def _split(text, size=KB_CHUNK_SIZE, overlap=KB_CHUNK_OVERLAP):
@@ -319,12 +403,13 @@ class _VectorIndex:
 
 
 class KnowledgeBase:
-    """两路索引：词匹配（稀疏倒排）+ 向量。build() 组装，search() 融合检索。"""
+    """多路检索：词匹配（稀疏倒排）+ 英文检索词 + 向量。build() 组装，search() 融合。"""
 
     def __init__(self):
         self.chunks = []
         self._index = None
         self._weights = None
+        self._chinese = None
         self._vector = None
         self.vector_error = ""   # 向量那路出问题就把原因记这儿，检索自动退回词匹配
         self.skipped = []        # 解析失败的文件名，便于排查
@@ -377,6 +462,7 @@ class KnowledgeBase:
         self.chunks = corpus
         self._index = _SparseIndex([c["tokens"] for c in corpus]) if corpus else None
         self._weights = np.array(weights, dtype=np.float32) if corpus else None
+        self._chinese = np.array([_is_chinese(c["text"]) for c in corpus], dtype=bool)
         # 先把带向量的缓存写到盘上，再从 files 里摘掉拼成矩阵，省得内存里存两份
         _write_cache(files, embed_sig)
         self._vector = self._load_vectors(files) if want_vectors else None
@@ -408,13 +494,25 @@ class KnowledgeBase:
         return _VectorIndex(matrix)
 
     def search(self, query, top_k):
-        """返回 [(分数, 块), ...]，按相关度从高到低，不相关的直接丢掉。"""
+        """返回 [(分数, 块), ...]，按相关度从高到低，不相关的直接丢掉。
+
+        原查询那一路永远都在：英文检索和向量都只是往结果里补，不会把同语言的命中
+        挤掉。反过来，后两路翻不出来 / 没配 key 的时候就只剩原查询一路，行为跟以前
+        一样。
+        """
         if self._index is None:
             return []
-        sparse = self._rank_sparse(query)
-        if self._vector is None:
-            return [(score, self.chunks[i]) for i, score in sparse[:top_k]]
-        return self._fuse(sparse, self._rank_vector(query), top_k)
+
+        routes = [(self._rank_sparse(query), KB_SPARSE_WEIGHT)]
+        english = translate.to_english(query)
+        if english:
+            routes.append((self._rank_english(english), KB_TRANSLATE_WEIGHT))
+        if self._vector is not None:
+            routes.append((self._rank_vector(query), KB_VECTOR_WEIGHT))
+
+        if len(routes) == 1:
+            return [(score, self.chunks[i]) for i, score in routes[0][0][:top_k]]
+        return self._fuse(routes, top_k)
 
     def _top(self, scores, floor):
         """取分数最高的一批，返回 [(块下标, 分数), ...]，从高到低。"""
@@ -426,8 +524,20 @@ class KnowledgeBase:
         return [(int(i), float(scores[i])) for i in top if scores[i] > floor]
 
     def _rank_sparse(self, query):
-        """词匹配那路。"""
+        """词匹配那路（原查询走这条，按来源加权）。"""
         return self._top(self._index.scores(_query_terms(query), self._weights), 0.0)
+
+    def _rank_english(self, query):
+        """英文检索那一路：只在英文内容里找。
+
+        中文块有原查询那一路兜着，英文关键词对它们没有意义——中文资料里混着不少英文
+        术语（data、structure、memory 这种），拿英文检索词去打分它们也排得挺靠前，
+        同一段内容于是两路各得一次分，把真正的英文教材挤下去。所以这里按 _is_chinese
+        把中文块直接清零。
+        """
+        scores = self._index.scores(_query_terms(query), None)
+        scores[self._chinese] = 0.0
+        return self._top(scores, 0.0)
 
     def _rank_vector(self, query):
         """向量那路。
@@ -442,22 +552,18 @@ class KnowledgeBase:
             return []
         return self._top(self._vector.scores(vector), _VECTOR_MIN - 1e-6)
 
-    def _fuse(self, sparse, vector, top_k):
-        """RRF：两路各按名次给分再相加。
+    def _fuse(self, routes, top_k):
+        """RRF：每一路各按名次给分再相加。
 
-        用名次而不是原始分，是因为两路的分数量纲根本没法比（词匹配十几到几十分，
+        用名次而不是原始分，是因为各路的分数量纲根本没法比（词匹配十几到几十分，
         余弦 0~1），直接相加就得反复调系数；换成名次天然可比，也不怕某一路恰好
-        分数特别大把另一路整个盖住。
-        """
-        if not vector:
-            return [(score, self.chunks[i]) for i, score in sparse[:top_k]]
-        if not sparse:
-            return [(score, self.chunks[i]) for i, score in vector[:top_k]]
+        分数特别大把其它路整个盖住。
 
+        routes 是 [(名次列表, 权重), ...]；只有一路时名次顺序原样保留。
+        """
         fused = {}
-        for rank, (i, _) in enumerate(sparse):
-            fused[i] = fused.get(i, 0.0) + KB_SPARSE_WEIGHT / (_RRF_K + rank)
-        for rank, (i, _) in enumerate(vector):
-            fused[i] = fused.get(i, 0.0) + KB_VECTOR_WEIGHT / (_RRF_K + rank)
+        for ranked, weight in routes:
+            for rank, (i, _) in enumerate(ranked):
+                fused[i] = fused.get(i, 0.0) + weight / (_RRF_K + rank)
         best = sorted(fused.items(), key=lambda kv: -kv[1])[:top_k]
         return [(score, self.chunks[i]) for i, score in best]

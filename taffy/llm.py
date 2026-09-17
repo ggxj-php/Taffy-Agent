@@ -28,6 +28,27 @@ def _client(api_key, base_url):
         return client
 
 
+def complete(messages: list, model: str = "", api_key: str = "", base_url: str = "",
+             max_tokens: int = 1024):
+    """一次性把回答收完，给内部的小任务用（比如检索前把问题翻成英文关键词）。
+
+    max_tokens 不能太小：带思考的模型思维链也吃这个额度，给几百的话正文一个字都
+    轮不到，返回空字符串（这个坑在对话那边踩过一次，见 stream_chat）。
+    """
+    model = (model or "").strip() or settings.chat_model()
+    key = (api_key or "").strip() or settings.chat_key()
+    base = (base_url or "").strip() or settings.chat_base_url()
+    reply = _client(key, base).chat.completions.create(
+        model=model,
+        messages=messages,
+        max_tokens=max_tokens,
+        temperature=0,     # 这类任务要的是稳定，不要发挥
+    )
+    if not reply.choices:
+        return ""
+    return (reply.choices[0].message.content or "").strip()
+
+
 def stream_chat(messages: list, tools: list, model: str = "",
                 api_key: str = "", base_url: str = ""):
     """流式发一次请求，边收边吐增量。

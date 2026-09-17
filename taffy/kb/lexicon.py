@@ -458,6 +458,62 @@ def _segment(text):
     return [t for t in jieba.lcut(text) if t.strip() and any(c.isalnum() for c in t)]
 
 
+# 缩写补充：中文全称 -> 缩写本身。
+# 英文教材里往往直接写缩写（"the I2C bus"、"using an RTOS"），中文提问写的是全称，
+# 光靠上面的全称映射不到缩写这几个字，得单独补。
+_ACRONYMS = {
+    "集成电路总线": ("i2c", "sda", "scl"),
+    "串行外设接口": ("spi",),
+    "通用同步异步收发器": ("uart", "usart"),
+    "控制器局域网": ("can",),
+    "通用输入输出": ("gpio",),
+    "模数转换": ("adc",),
+    "数模转换": ("dac",),
+    "脉宽调制": ("pwm",),
+    "直接内存访问": ("dma",),
+    "中断服务程序": ("isr",),
+    "实时操作系统": ("rtos",),
+    "单片机": ("mcu",),
+    "物联网": ("iot",),
+    "消息队列遥测传输": ("mqtt",),
+    "受限应用协议": ("coap",),
+    "超文本传输协议": ("http", "https"),
+    "无线传感器网络": ("wsn",),
+    "射频识别": ("rfid",),
+    "近场通信": ("nfc",),
+    "低功耗蓝牙": ("ble",),
+    "窄带物联网": ("iot",),
+    "第五代移动通信": ("5g",),
+    "国家标准与技术研究院": ("nist",),
+}
+
+# 上面按方向整理时漏掉的高频通用词，随手补齐
+_MORE = {
+    "中央处理器": ("cpu", "processor"),
+    "内存管理单元": ("mmu",),
+    "操作系统": ("operating", "system"),
+    "计算机网络": ("computer", "network", "tcp", "ip"),
+    "网络": ("network",),
+    "协议": ("protocol",),
+    "数据库": ("database",),
+    "复杂度": ("complexity",),
+    "图论": ("graph", "theory"),
+    "题解": ("solution", "exercise", "problem"),
+    "习题": ("exercise", "problem"),
+    "题目": ("problem", "question", "exercise"),
+    "素数": ("prime",),
+    "最大公约数": ("greatest", "common", "divisor", "gcd"),
+    "最小公倍数": ("least", "common", "multiple", "lcm"),
+    "模运算": ("modular", "modulo", "mod"),
+    "排列组合": ("permutation", "combination"),
+    "进制": ("radix", "base"),
+}
+
+for _extra in (_ACRONYMS, _MORE):
+    for _cn, _words in _extra.items():
+        TERMS[_cn] = tuple(dict.fromkeys(TERMS.get(_cn, ()) + _words))
+
+
 # 英文单词 -> 中文术语，由 TERMS 反推，供「英文提问补中文词」用
 _REVERSE = {}
 for _cn, _ens in TERMS.items():

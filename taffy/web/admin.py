@@ -87,6 +87,7 @@ def _state():
     return {
         "model": settings.chat_model(),
         "vision_model": settings.vision_model(),
+        "translate_model": settings.translate_model(),
         "model_history": settings.model_history(),
         # key 本身不回给前端，只说它是从哪来的：admin（后台配的）/ env（.env 里的）。
         # 接口地址不是秘密，直接把当前生效的值给出去，页面拿它当占位提示。
@@ -152,6 +153,8 @@ def state(request: Request):
 class ModelsRequest(BaseModel):
     model: str = ""
     vision_model: str = ""
+    # 知识库检索前把中文问题翻成英文关键词用的模型，留空 = 跟聊天模型一样
+    translate_model: str = ""
 
 
 @router.post("/api/admin/models")
@@ -160,8 +163,8 @@ def save_models(req: ModelsRequest, request: Request):
     model = req.model.strip()
     vision = req.vision_model.strip()
     if not model or not vision:
-        raise HTTPException(status_code=400, detail="两个模型名都得填喵")
-    settings.update_models(model, vision)
+        raise HTTPException(status_code=400, detail="聊天和图片的模型名都得填喵")
+    settings.update_models(model, vision, req.translate_model.strip())
     return _state()
 
 

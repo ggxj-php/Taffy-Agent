@@ -45,6 +45,10 @@
       <label>图片模型（消息里带图片的那一轮）
         <input id="vision-model" list="model-list" placeholder="deepseek-flash" autocomplete="off">
       </label>
+      <label>检索翻译模型（查知识库时把中文问题翻成英文关键词；留空就跟聊天模型一样）
+        <input id="translate-model" list="model-list" placeholder="留空 = 跟聊天模型一样"
+               autocomplete="off">
+      </label>
       <datalist id="model-list"></datalist>
       <button type="button" id="save-models">保存模型</button>
       <p class="hint" id="history-hint"></p>
@@ -85,7 +89,7 @@
     <div class="card">
       <h2>向量模型（知识库检索用）</h2>
       <label>模型
-        <input id="embed-model" placeholder="qwen3.7-text-embedding-flash" autocomplete="off">
+        <input id="embed-model" placeholder="text-embedding-v4" autocomplete="off">
       </label>
       <label>接口地址
         <input id="embed-base" placeholder="https://dashscope.aliyuncs.com/compatible-mode/v1"
@@ -99,10 +103,11 @@
       <p class="hint" id="embed-state"></p>
       <p class="hint">
         这是给知识库检索用的，跟上面聊天 / 图片那两套没关系。<br>
-        检索是两路一起用的：<b>词匹配</b>管精确词（STM32F103、I2C、IEEE754 这种），
-        <b>向量</b>管语义和跨语言——中文提问能搜到英文教材，靠的就是这一路。<br>
-        任何 OpenAI 兼容的 <code>/embeddings</code> 接口都能用；留空就只用词匹配（也能用，
-        只是中文问题搜不到英文书）。<br>
+        检索是三路一起用的：<b>词匹配</b>管精确词（STM32F103、I2C、IEEE754 这种）；
+        <b>英文检索词</b>会把中文问题翻成英文关键词去查英文教材（用上面那个「检索翻译模型」）；
+        <b>向量</b>管语义——换个说法、近义表达只有它认得出。<br>
+        英译和词匹配那两路不要钱，所以这一路留空也能用，配上只是更准。<br>
+        任何 OpenAI 兼容的 <code>/embeddings</code> 接口都能用。<br>
         索引维度按 <code>EMBED_DIM</code> 校验（当前 <span id="embed-dim">?</span> 维），
         对不上会直接报错。<b>改完要重启服务才生效</b>，而且会重新向量化一遍全库。
       </p>

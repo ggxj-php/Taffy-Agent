@@ -21,6 +21,7 @@ from .config import (
     EMBED_MODEL,
     MODEL,
     PROJECT_ROOT,
+    SEARCH_TRANSLATE_MODEL,
     VISION_API_KEY,
     VISION_BASE_URL,
     VISION_MODEL,
@@ -61,6 +62,7 @@ def _load():
         "embed_model": str(raw.get("embed_model") or ""),
         "model": str(raw.get("model") or ""),
         "vision_model": str(raw.get("vision_model") or ""),
+        "translate_model": str(raw.get("translate_model") or ""),
         "model_history": [m for m in history if isinstance(m, str)] if isinstance(history, list) else [],
     }
     return _cache
@@ -95,6 +97,14 @@ def model_for(vision):
     return vision_model() if vision else chat_model()
 
 
+def translate_model():
+    """检索前把中文问题翻成英文关键词用的模型。
+
+    留空就回落到聊天那个模型——只做一件小事，不值得为它非配不可。
+    """
+    return _load()["translate_model"] or SEARCH_TRANSLATE_MODEL
+
+
 def model_history():
     """用过的模型，新的在前，后台拿它当候选列表。"""
     return list(_load()["model_history"])
@@ -114,15 +124,20 @@ def remember_model(name):
         _write(data)
 
 
-def update_models(model, vision):
-    """存两个模型名，顺手记进历史列表。"""
+def update_models(model, vision, translate):
+    """存三个模型名，顺手记进历史列表。
+
+    translate（检索翻译用的模型）允许留空，那就跟着聊天模型走。
+    """
     model = (model or "").strip()
     vision = (vision or "").strip()
+    translate = (translate or "").strip()
     with _lock:
         data = _load()
         data["model"] = model
         data["vision_model"] = vision
-        for name in (model, vision):
+        data["translate_model"] = translate
+        for name in (model, vision, translate):
             if name and name not in data["model_history"]:
                 data["model_history"].insert(0, name)
         del data["model_history"][HISTORY_LIMIT:]

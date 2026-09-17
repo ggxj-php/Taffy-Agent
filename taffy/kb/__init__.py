@@ -3,8 +3,8 @@
 索引是进程内单例，只建一次。运行中往 knowledge/ 里加了文件不会自动生效，
 重启一下就好。
 
-检索走两路（词匹配 + 向量），细节见 index.py。索引在后台线程里建：建好之前
-search() 拿到的是个半成品，会先只用词匹配顶着，向量算好了下一问就自动用上。
+检索走几路（原查询词匹配 + 英文检索词 + 向量），细节见 index.py。索引在后台线程里建：
+建好之前 search() 拿到的是个半成品；索引本身是同步就绪的，向量那一路算好了下一问就自动用上。
 """
 import threading
 
@@ -64,7 +64,7 @@ def search(query, top_k=KB_TOP_K):
     if not hits:
         return f"知识库里没找到和「{query}」相关的内容。"
 
-    # 不打分数：两路融合后的分数是个很小的名次分，写出来反而会让人误判相关性
+    # 不打分数：各路融合后的分数是个很小的名次分，写出来反而会让人误判相关性
     blocks = []
     for _score, chunk in hits:
         page = f" 第 {chunk['page']} 页" if chunk.get("page") else ""
