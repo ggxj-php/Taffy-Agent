@@ -504,10 +504,15 @@ body {
 }
 
 /* ---------- 表情包 ---------- */
+/* 表情包：只限最大尺寸，不写死成正方形。
+   表情包长得横七竖八（有宽有竖的），原来钉死 116×116 会把它们压扁拉变形——
+   这里 width/height 都 auto，浏览器按原图宽高比缩到框里，不变形。 */
 .sticker {
   display: block;
-  width: 116px;
-  height: 116px;
+  width: auto;
+  height: auto;
+  max-width: 116px;
+  max-height: 116px;
   margin: 8px 0 2px;
   border-radius: 14px;
   box-shadow: 0 3px 12px rgba(224, 114, 159, .22);
@@ -728,7 +733,7 @@ body {
   }
   .topbar { padding-top: 12px; padding-bottom: 12px; }
   .bubble { max-width: 76%; }
-  .sticker { width: 140px; height: 140px; }
+  .sticker { max-width: 140px; max-height: 140px; }
 }
 
 /* 小屏手机上顶栏挤了三个按钮（导入 / 保存 / 新会话），把按钮压窄一点，
