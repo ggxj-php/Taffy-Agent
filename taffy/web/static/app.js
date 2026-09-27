@@ -62,6 +62,9 @@ const saveUuidEl = document.getElementById('save-uuid');
 const saveMsgEl = document.getElementById('save-msg');
 const saveOkEl = document.getElementById('save-ok');
 const saveCancelEl = document.getElementById('save-cancel');
+const ctxBarEl = document.getElementById('ctx-bar');
+const ctxFillEl = document.getElementById('ctx-fill');
+const ctxTextEl = document.getElementById('ctx-text');
 
 let sessionId = sessionStorage.getItem(STORAGE_KEY);
 let busy = false;
@@ -387,6 +390,15 @@ function errorBubble(turn, message) {
   turn.bubble.appendChild(box);
 }
 
+/* 系统提示条（不是塔菲说的话），比如「历史太长，旧的那段压成摘要了」 */
+function noticeBubble(turn, text) {
+  turn.content = null;
+  const box = el('div', 'notice');
+  box.textContent = text;
+  turn.bubble.appendChild(box);
+  updateToBottom();
+}
+
 function prettyArgs(raw) {
   try {
     return JSON.stringify(JSON.parse(raw), null, 2);
@@ -405,6 +417,40 @@ async function ensureSession(force) {
   sessionId = data.session_id;
   sessionStorage.setItem(STORAGE_KEY, sessionId);
   return sessionId;
+}
+
+/* ---------------- 上下文占用 ----------------
+   后端按「中文 1 字 1 token、英文 4 字符 1 token」粗估（见 taffy/context.py），
+   所以这个百分比是估的，不是 API 报的真实用量；够用来提醒「快满了」。
+   用到窗口的八成时后端会自动把旧历史压成摘要，压完这个数会掉下来。 */
+
+const CTX_WARN = 80;   // 到这条线就变橙：接着聊就要触发自动压缩了
+
+function paintContext(info) {
+  if (!info || !info.limit) {
+    ctxBarEl.hidden = true;
+    return;
+  }
+  const percent = Math.max(0, Math.min(100, info.percent || 0));
+  ctxBarEl.hidden = false;
+  ctxFillEl.style.width = `${percent}%`;
+  ctxFillEl.classList.toggle('warn', percent >= CTX_WARN);
+  ctxTextEl.textContent = `${percent}% · ${Math.round(info.tokens / 1000)}k/` +
+    `${Math.round(info.limit / 1000)}k`;
+  ctxBarEl.title = `这段对话大概占了 ${info.tokens} token，模型窗口 ${info.limit} token` +
+    `（用到 ${Math.round((info.compress_at || 0.8) * 100)}% 时自动压缩）`;
+}
+
+async function refreshContext() {
+  try {
+    const resp = await fetch(
+      `/api/context?session_id=${encodeURIComponent(sessionId || '')}`,
+      { cache: 'no-store' },
+    );
+    if (resp.ok) paintContext(await resp.json());
+  } catch (err) {
+    /* 拿不到就先不显示，下一轮再说 */
+  }
 }
 
 /* ---------------- SSE ---------------- */
@@ -496,6 +542,15 @@ function handleEvent(turn, event) {
     case 'sticker':
       addSticker(turn, event.mood);
       break;
+    case 'compressed':
+      noticeBubble(turn,
+        `这段聊得有点长啦，塔菲把前面 ${event.dropped} 条旧记录压成摘要了喵` +
+        `（上下文从 ${Math.round(event.before_tokens / 1000)}k 降到 ` +
+        `${Math.round(event.after_tokens / 1000)}k），接着聊就好～`);
+      break;
+    case 'done':
+      if (event.context) paintContext(event.context);
+      break;
     case 'error':
       errorBubble(turn, event.message);
       break;
@@ -566,6 +621,7 @@ async function send(text, image) {
     sendEl.disabled = false;
     pickImageEl.disabled = false;
     statusEl.textContent = '在线喵';
+    refreshContext();     // 这一轮又添了几条，顺便把上下文占用刷新一下
     inputEl.focus();
   }
 }
@@ -744,10 +800,12 @@ newChatEl.addEventListener('click', async () => {
   messagesEl.innerHTML = '';
   sessionId = null;
   sessionStorage.removeItem(STORAGE_KEY);
+  paintContext(null);      // 新会话，占用归零
   updateToBottom();
   try {
     await ensureSession(true);
     welcome();
+    refreshContext();
   } catch (err) {
     statusEl.textContent = '开新会话失败';
   }
@@ -764,7 +822,9 @@ function welcome() {
     '算法题、代码、知识库里的资料都可以问我；嵌入式、单片机（STM32 那种）、物联网、' +
     '计算机组成原理、数字取证这些塔菲也懂喵。左下角可以发图片给塔菲看（看完就删，不会留着）；' +
     '想把这段聊天存下来就点右上角「保存上下文」，塔菲会存成一份 txt（要你自己起个名字）；' +
-    '想换个话题就点「新会话」，塔菲会把之前的事忘干净从头开始喵～'
+    '想换个话题就点「新会话」，塔菲会把之前的事忘干净从头开始喵～\n\n' +
+    '输入框上面那条是这段对话占了多少「上下文」，快满的时候塔菲会自己把前面聊过的' +
+    '压成摘要，不会聊着聊着就卡住喵。'
   );
 }
 
@@ -773,6 +833,7 @@ function welcome() {
   try {
     await ensureSession();
     welcome();
+    refreshContext();  // 刷新页面后把上次聊到哪、上下文用了几成接回来
   } catch (err) {
     statusEl.textContent = '连不上服务喵';
   }

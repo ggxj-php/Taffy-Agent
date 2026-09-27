@@ -133,14 +133,18 @@ def check(provider):
     return info
 
 
-def _restart_later(delay=2.0):
-    """过一会儿重启服务：先让响应发回去，再让 systemd 把新代码拉起来。"""
-    timer = threading.Timer(delay, _restart_now)
+def restart_later(delay=2.0):
+    """过一会儿重启服务：先让响应发回去，再让 systemd 把新代码拉起来。
+
+    别的模块也要用（知识库改完得重启才会重新扫 knowledge/），所以是公开的。
+    """
+    timer = threading.Timer(delay, restart_now)
     timer.daemon = True
     timer.start()
+    return timer
 
 
-def _restart_now():
+def restart_now():
     # --no-block：任务交给 systemd 就返回，免得自己被杀在半路。
     # start_new_session：别跟本进程一个会话，不然一起被带走。
     for cmd in (["systemctl", "--no-block", "restart", SERVICE_NAME],
@@ -177,7 +181,7 @@ def apply(provider):
                 "message": f"已经是最新的了（{after}），没有东西要更新"}
 
     if service_active():
-        _restart_later()
+        restart_later()
         return {
             "ok": True, "restart": True, "from": before, "to": after,
             "message": f"更新好了：{before} → {after}。两秒后自动重启生效，"

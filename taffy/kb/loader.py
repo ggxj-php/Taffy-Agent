@@ -104,6 +104,11 @@ def supported(path):
     return os.path.splitext(path)[1].lower() in _LOADERS
 
 
+def extensions():
+    """支持的后缀清单，后台页面拿它提示主人能传什么。"""
+    return tuple(sorted(_LOADERS))
+
+
 def load(path):
     """解析一个文档，返回 [(文本段, 页码或 None)]；不支持的格式返回空列表。"""
     loader = _LOADERS.get(os.path.splitext(path)[1].lower())

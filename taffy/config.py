@@ -108,6 +108,20 @@ SEARCH_TRANSLATE_MODEL = os.environ.get("SEARCH_TRANSLATE_MODEL", "").strip()
 TRANSLATE_BASE_URL = os.environ.get("TRANSLATE_BASE_URL", "").strip()
 TRANSLATE_API_KEY = os.environ.get("TRANSLATE_API_KEY", "").strip()
 
+# ---------- 对话上下文 ----------
+# 模型的上下文窗口有多大（token）。历史快填满时塔菲会自动把旧的那段压成摘要
+# （见 taffy/context.py），免得请求被模型直接拒掉（超了就是 400，那一轮就废了）。
+# 填的是「这个模型能吃多少」，不是「想留多少」；拿不准就照官方文档写。
+CONTEXT_LIMIT = int(os.environ.get("CONTEXT_LIMIT", "65536") or 65536)
+
+# 历史用到窗口的百分之多少就自动压缩。0.8 = 八成满就压，别等真满了——
+# 满了那一轮直接发不出去。想压得更早（更省 token、但更早丢细节）就往下调。
+CONTEXT_COMPRESS_AT = float(os.environ.get("CONTEXT_COMPRESS_AT", "0.8") or 0.8)
+
+# 压缩时至少保留最近这么多条消息的原文。工具调用和它的结果不能被拆开，
+# 所以实际断点会往后找一条安全的用户消息对齐（见 context._cut_index）。
+CONTEXT_KEEP_RECENT = int(os.environ.get("CONTEXT_KEEP_RECENT", "12") or 12)
+
 # ---------- 网页版 ----------
 # 网页版「保存上下文」存下来的会话存档（一个会话一个 txt）放这儿，不进 git。
 SESSIONS_DIR = os.path.join(PROJECT_ROOT, "sessions")

@@ -513,6 +513,57 @@ body {
   font-size: 13px;
 }
 
+/* ---------- 上下文占用（输入框上面那条） ---------- */
+.ctx-bar {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 12px 0;
+  background: #fff;
+  font-size: 11.5px;
+  color: var(--ink-soft);
+}
+
+.ctx-bar[hidden] { display: none; }
+
+.ctx-label { flex: none; }
+
+.ctx-track {
+  flex: 1;
+  height: 5px;
+  border-radius: 999px;
+  background: #ffe3f0;
+  overflow: hidden;
+}
+
+.ctx-fill {
+  display: block;
+  width: 0;
+  height: 100%;
+  border-radius: 999px;
+  background: linear-gradient(90deg, var(--pink-dark), var(--pink-deep));
+  transition: width .3s ease;
+}
+
+/* 快到自动压缩那条线了就变橙，提醒一下 */
+.ctx-fill.warn { background: linear-gradient(90deg, #ffb347, #ff8c42); }
+
+.ctx-text {
+  flex: none;
+  font-variant-numeric: tabular-nums;
+}
+
+/* 系统提示条（比如「历史太长，已经压成摘要了」），跟塔菲说的话区分开 */
+.notice {
+  margin-top: 6px;
+  padding: 6px 10px;
+  border-radius: 10px;
+  background: #fff0f7;
+  color: var(--ink-soft);
+  font-size: 12px;
+}
+
 /* ---------- 输入区 ---------- */
 .composer {
   flex: none;
@@ -627,7 +678,7 @@ body {
 
 /* ---------- 桌面端 ---------- */
 @media (min-width: 720px) {
-  .topbar, .messages, .composer {
+  .topbar, .messages, .composer, .ctx-bar {
     padding-left: max(16px, calc(50vw - 420px));
     padding-right: max(16px, calc(50vw - 420px));
   }
@@ -829,7 +880,9 @@ body.admin .chips button {
 .nav-items { padding: 2px 0 4px; }
 
 .nav-item {
-  display: block;
+  display: flex;
+  align-items: center;
+  gap: 7px;
   width: 100%;
   padding: 8px 10px 8px 16px;
   border: none;
@@ -857,6 +910,52 @@ body.admin .chips button {
   line-height: 1.6;
   color: var(--ink-soft);
 }
+
+/* 导航条目和分组标题前面那枚图标 */
+.nav-ico {
+  flex: none;
+  width: 18px;
+  font-size: 13px;
+  line-height: 1;
+  text-align: center;
+}
+
+/* 整个侧边栏收起 / 展开。收起就只剩一列图标，页面立刻宽敞；
+   状态记在浏览器里（localStorage），换设备要重收一次。 */
+.nav-collapse {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  margin-bottom: 8px;
+  padding: 7px 10px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: #fff;
+  font: inherit;
+  font-size: 12px;
+  color: var(--ink-soft);
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.nav-collapse:hover { background: #fff0f7; }
+
+.nav-collapse-ico { font-size: 13px; line-height: 1; }
+
+.sidebar.mini { width: 54px; }
+
+.sidebar.mini .nav-head,
+.sidebar.mini .nav-text,
+.sidebar.mini .nav-collapse-text,
+.sidebar.mini .sidebar-tip { display: none; }
+
+.sidebar.mini .nav-collapse { justify-content: center; padding: 7px 0; }
+
+/* 收起状态下点不到分组标题，所以组里的条目一律露出来（不分折叠与否） */
+.sidebar.mini .nav-group.closed .nav-items { display: block; }
+.sidebar.mini .nav-item { justify-content: center; padding: 9px 0; }
+.sidebar.mini .nav-items { padding: 0 0 6px; }
 
 /* ---------- 仪表盘 ---------- */
 
@@ -1136,6 +1235,20 @@ body.admin .card input[type="file"] { padding: 8px 10px; font-size: 13px; }
   }
 
   .sidebar.open { transform: none; }
+
+  /* 手机上侧边栏是抽屉：不做「只剩图标」那套——抽屉里没有悬停提示，
+     光看图标认不出是哪个，而且抽屉本来就只在点开时占地方 */
+  .sidebar.mini { width: 232px; }
+
+  .sidebar.mini .nav-head,
+  .sidebar.mini .sidebar-tip { display: block; }
+
+  .sidebar.mini .nav-head { display: flex; }
+  .sidebar.mini .nav-text,
+  .sidebar.mini .nav-collapse-text { display: inline; }
+  .sidebar.mini .nav-collapse { justify-content: flex-start; padding: 7px 10px; }
+  .sidebar.mini .nav-item { justify-content: flex-start; padding: 8px 10px 8px 16px; }
+  .sidebar.mini .nav-group.closed .nav-items { display: none; }
 
   .admin-main { padding-top: 0; }
 }

@@ -6,7 +6,8 @@
 
 const MOODS = ['happy', 'think', 'confused', 'proud', 'cry', 'angry', 'sleepy', 'love'];
 const IMG_EXTS = ['.png', '.jpg', '.jpeg', '.gif', '.webp'];
-const NAV_KEY = 'taffy_admin_nav_closed';
+const NAV_KEY = 'taffy_admin_nav_closed';   // 哪几个分组收起来了
+const NAV_MINI_KEY = 'taffy_admin_nav_mini'; // 整个侧边栏收成图标条了吗
 
 const statusEl = document.getElementById('status');
 const loginView = document.getElementById('login-view');
@@ -15,6 +16,8 @@ const logoutEl = document.getElementById('logout');
 const loginForm = document.getElementById('login-form');
 const passwordEl = document.getElementById('password');
 const navToggleEl = document.getElementById('nav-toggle');
+const navCollapseEl = document.getElementById('nav-collapse');
+const navCollapseIcoEl = navCollapseEl.querySelector('.nav-collapse-ico');
 const sidebarEl = document.getElementById('sidebar');
 const sidebarTipEl = document.getElementById('sidebar-tip');
 
@@ -25,6 +28,9 @@ const datalistEl = document.getElementById('model-list');
 const historyHintEl = document.getElementById('history-hint');
 const historyEl = document.getElementById('history-chips');
 const saveModelsEl = document.getElementById('save-models');
+const contextLimitEl = document.getElementById('context-limit');
+const contextStateEl = document.getElementById('context-state');
+const saveContextEl = document.getElementById('save-context');
 
 const chatBaseEl = document.getElementById('chat-base');
 const chatKeyEl = document.getElementById('chat-key');
@@ -63,6 +69,15 @@ const stickerFileEl = document.getElementById('sticker-file');
 const stickerUploadEl = document.getElementById('sticker-upload');
 const stickerTotalEl = document.getElementById('sticker-total');
 const stickerLibraryEl = document.getElementById('sticker-library');
+
+const knPathEl = document.getElementById('kn-path');
+const knFileEl = document.getElementById('kn-file');
+const knUploadEl = document.getElementById('kn-upload');
+const knStatusEl = document.getElementById('kn-status');
+const knCountEl = document.getElementById('kn-count');
+const knTotalEl = document.getElementById('kn-total');
+const knListEl = document.getElementById('kn-list');
+const knHintEl = document.getElementById('kn-hint');
 
 const wsPathEl = document.getElementById('ws-path');
 const wsFileEl = document.getElementById('ws-file');
@@ -180,19 +195,40 @@ function saveClosedGroups(list) {
   }
 }
 
+function miniNav() {
+  try {
+    return localStorage.getItem(NAV_MINI_KEY) === '1';
+  } catch (err) {
+    return false;
+  }
+}
+
+function saveMiniNav(on) {
+  try {
+    localStorage.setItem(NAV_MINI_KEY, on ? '1' : '0');
+  } catch (err) {
+    /* 存不了就算了，顶多下次打开还是展开的 */
+  }
+}
+
+/* 收起 / 展开整个侧边栏：收起后只剩一列图标，页面立刻宽敞 */
+function paintMini(on) {
+  sidebarEl.classList.toggle('mini', on);
+  navCollapseIcoEl.textContent = on ? '»' : '«';
+  navCollapseEl.title = on ? '展开导航' : '收起导航';
+}
+
 function initNav() {
   const closed = closedGroups();
   document.querySelectorAll('#nav .nav-group').forEach((group) => {
     const head = group.querySelector('.nav-head');
-    const key = head.textContent.trim();
+    const key = group.dataset.group || '';
     if (closed.indexOf(key) >= 0) group.classList.add('closed');
     head.addEventListener('click', () => {
       group.classList.toggle('closed');
       const list = [];
       document.querySelectorAll('#nav .nav-group').forEach((item) => {
-        if (item.classList.contains('closed')) {
-          list.push(item.querySelector('.nav-head').textContent.trim());
-        }
+        if (item.classList.contains('closed')) list.push(item.dataset.group || '');
       });
       saveClosedGroups(list);
     });
@@ -200,6 +236,13 @@ function initNav() {
 
   document.querySelectorAll('#nav .nav-item').forEach((item) => {
     item.addEventListener('click', () => showView(item.dataset.view));
+  });
+
+  paintMini(miniNav());
+  navCollapseEl.addEventListener('click', () => {
+    const on = !sidebarEl.classList.contains('mini');
+    paintMini(on);
+    saveMiniNav(on);
   });
 
   navToggleEl.addEventListener('click', () => {
@@ -224,6 +267,7 @@ function showView(name) {
 const VIEW_HOOKS = {
   dashboard: refreshSysinfo,
   stickers: loadStickers,
+  knowledge: loadKnowledge,
   workspace: () => loadWorkspace(wsDir),
   sessions: loadSessions,
   update: initUpdate,
@@ -284,6 +328,12 @@ function render(state) {
   renderKb(state.kb);
   updateRemoteEl.value = state.update_remote || 'gitee';
 
+  contextLimitEl.value = state.context_limit;
+  const at = Math.round((state.context_compress_at || 0.8) * 100);
+  const atTokens = Math.round(state.context_limit * (state.context_compress_at || 0.8) / 1000);
+  contextStateEl.textContent =
+    `现在按 ${state.context_limit} token 算，用到 ${atTokens}k 左右（${at}%）就自动压缩。`;
+
   const history = state.model_history || [];
   datalistEl.innerHTML = '';
   historyEl.innerHTML = '';
@@ -323,19 +373,22 @@ async function load(message) {
 
 /* 知识库索引状态那一行。建向量要好几分钟，所以单独抽出来，刷新时别碰输入框 */
 function renderKb(kb) {
+  const write = (node) => { if (node) node.textContent = text; };
+  let text;
   if (!kb || (!kb.chunks && !kb.building)) {
-    kbStatusEl.textContent = '还没开始建喵（knowledge/ 里可能没文档）。';
-    return;
+    text = '还没开始建喵（knowledge/ 里可能没文档）。';
+  } else {
+    const parts = [];
+    if (kb.building) parts.push('正在建');
+    parts.push(`收进来 ${kb.chunks} 块`);
+    parts.push(kb.vectors
+      ? `其中 ${kb.vectors} 块带向量，三路检索都在用`
+      : '没有向量（原查询 + 英文检索词照常用）');
+    text = `${parts.join('，')}。`;
+    if (kb.error) text += ` 最近一次向量调用出过错：${kb.error}`;
   }
-  const parts = [];
-  if (kb.building) parts.push('正在建');
-  parts.push(`收进来 ${kb.chunks} 块`);
-  parts.push(kb.vectors
-    ? `其中 ${kb.vectors} 块带向量，三路检索都在用`
-    : '没有向量（原查询 + 英文检索词照常用）');
-  let text = `${parts.join('，')}。`;
-  if (kb.error) text += ` 最近一次向量调用出过错：${kb.error}`;
   kbStatusEl.textContent = text;
+  write(knStatusEl);
 }
 
 async function refreshKbStatus() {
@@ -642,6 +695,103 @@ async function uploadWorkspace() {
   }
 }
 
+/* ---------------- 知识库文档 ---------------- */
+
+/* 知识库改完会自动重启服务（索引是进程内建的），重启时这个页面会断线。
+   所以等 /api/ping 重新通了自己刷一下，主人不用手动刷新。 */
+function relaxAfterRestart() {
+  const started = Date.now();
+  const tick = async () => {
+    if (Date.now() - started > 90000) return;   // 一分半还没回来就不等了
+    try {
+      const resp = await fetch('/api/ping', { cache: 'no-store' });
+      if (resp.ok && Date.now() - started > 9000) {
+        location.reload();
+        return;
+      }
+    } catch (err) {
+      /* 还在重启，接着等 */
+    }
+    setTimeout(tick, 3000);
+  };
+  setTimeout(tick, 9000);
+}
+
+function knRow(item) {
+  const row = el('div', 'row');
+  const icon = el('span', 'row-icon');
+  icon.textContent = item.supported ? '📕' : '⚠️';
+  const name = el('span', 'row-name');
+  name.textContent = item.path;
+  const meta = el('span', 'row-meta');
+  meta.textContent = `${fmtSize(item.size)} · ${fmtTime(item.mtime)}` +
+    (item.supported ? '' : ' · 这格式进不了索引');
+  row.append(icon, name, meta);
+
+  const del = el('button', 'row-btn danger');
+  del.type = 'button';
+  del.textContent = '删除';
+  del.addEventListener('click', async () => {
+    if (!confirm(`确定把 ${item.path} 从知识库删掉喵？删完会自动重启重建索引。`)) return;
+    try {
+      const data = await api('/api/admin/knowledge/delete', { path: item.path });
+      flash(data.message, true);
+      loadKnowledge();
+      if (data.restart) relaxAfterRestart();
+    } catch (err) {
+      guard(err);
+    }
+  });
+  row.appendChild(del);
+  return row;
+}
+
+async function loadKnowledge() {
+  try {
+    const data = await api('/api/admin/knowledge');
+    const files = data.files || [];
+    knCountEl.textContent = files.length;
+    knTotalEl.textContent = fmtSize(data.total_bytes);
+    knListEl.innerHTML = '';
+    if (!files.length) {
+      const empty = el('div', 'row empty');
+      empty.textContent = 'knowledge/ 还是空的喵，上面传一个文档进来吧。';
+      knListEl.appendChild(empty);
+    }
+    files.forEach((item) => knListEl.appendChild(knRow(item)));
+    knHintEl.textContent = (data.truncated ? '文件太多，只列了前面一部分喵。' : '') +
+      `认的格式：${(data.extensions || []).join(' / ')}；单个上限 ${fmtSize(data.max_bytes)}。`;
+    refreshKbStatus();
+  } catch (err) {
+    guard(err);
+  }
+}
+
+async function uploadKnowledge() {
+  const file = knFileEl.files && knFileEl.files[0];
+  if (!file) {
+    flash('先挑一个文档喵', false);
+    return;
+  }
+  let rel = knPathEl.value.trim().replace(/\\/g, '/').replace(/^\/+/, '');
+  if (!rel) rel = file.name;
+  if (rel.endsWith('/')) rel += file.name;
+  knUploadEl.disabled = true;
+  flash('正在上传喵…');
+  try {
+    const data = await apiUpload(`/api/admin/knowledge/upload?path=${encodeURIComponent(rel)}`, file);
+    knFileEl.value = '';
+    knPathEl.value = '';
+    flash(`传好了喵：${data.path}（${fmtSize(data.size)}）`, true);
+    loadKnowledge();
+    if (data.restart) relaxAfterRestart();
+  } catch (err) {
+    guard(err);
+  } finally {
+    knUploadEl.disabled = false;
+  }
+}
+
 /* ---------------- 会话存档 ---------------- */
 
 async function loadSessions() {
@@ -891,8 +1041,26 @@ saveEmbedEl.addEventListener('click', async () => {
   }
 });
 
+saveContextEl.addEventListener('click', async () => {
+  const limit = parseInt(contextLimitEl.value.trim(), 10);
+  if (!limit || limit < 4096) {
+    flash('上下文上限得填个大于 4096 的数字喵（单位是 token）', false);
+    return;
+  }
+  saveContextEl.disabled = true;
+  try {
+    render(await api('/api/admin/context', { limit }));
+    flash('上下文上限存好了喵，立刻生效', true);
+  } catch (err) {
+    guard(err);
+  } finally {
+    saveContextEl.disabled = false;
+  }
+});
+
 stickerUploadEl.addEventListener('click', uploadSticker);
 stickerImportEl.addEventListener('click', importZip);
+knUploadEl.addEventListener('click', uploadKnowledge);
 wsUploadEl.addEventListener('click', uploadWorkspace);
 updateCheckEl.addEventListener('click', checkUpdate);
 updateApplyEl.addEventListener('click', applyUpdate);

@@ -23,42 +23,80 @@
 <div class="admin-shell">
 
   <aside class="sidebar" id="sidebar" hidden>
+    <button type="button" id="nav-collapse" class="nav-collapse" title="收起导航">
+      <span class="nav-collapse-ico" aria-hidden="true">«</span>
+      <span class="nav-collapse-text">收起导航</span>
+    </button>
     <nav id="nav">
-      <section class="nav-group">
-        <button type="button" class="nav-head">概览<i class="caret" aria-hidden="true"></i></button>
+      <section class="nav-group" data-group="概览">
+        <button type="button" class="nav-head">
+          <span class="nav-ico" aria-hidden="true">🏠</span><span class="nav-text">概览</span>
+          <i class="caret" aria-hidden="true"></i>
+        </button>
         <div class="nav-items">
-          <button type="button" class="nav-item" data-view="dashboard">仪表盘</button>
+          <button type="button" class="nav-item" data-view="dashboard" title="仪表盘">
+            <span class="nav-ico" aria-hidden="true">📊</span><span class="nav-text">仪表盘</span>
+          </button>
         </div>
       </section>
 
-      <section class="nav-group">
-        <button type="button" class="nav-head">模型与接口<i class="caret" aria-hidden="true"></i></button>
+      <section class="nav-group" data-group="模型与接口">
+        <button type="button" class="nav-head">
+          <span class="nav-ico" aria-hidden="true">🔌</span><span class="nav-text">模型与接口</span>
+          <i class="caret" aria-hidden="true"></i>
+        </button>
         <div class="nav-items">
-          <button type="button" class="nav-item" data-view="models">模型</button>
-          <button type="button" class="nav-item" data-view="keys">接口与 Key</button>
-          <button type="button" class="nav-item" data-view="embed">向量模型</button>
+          <button type="button" class="nav-item" data-view="models" title="模型">
+            <span class="nav-ico" aria-hidden="true">🤖</span><span class="nav-text">模型</span>
+          </button>
+          <button type="button" class="nav-item" data-view="keys" title="接口与 Key">
+            <span class="nav-ico" aria-hidden="true">🔑</span><span class="nav-text">接口与 Key</span>
+          </button>
+          <button type="button" class="nav-item" data-view="embed" title="向量模型">
+            <span class="nav-ico" aria-hidden="true">🧭</span><span class="nav-text">向量模型</span>
+          </button>
         </div>
       </section>
 
-      <section class="nav-group">
-        <button type="button" class="nav-head">素材<i class="caret" aria-hidden="true"></i></button>
+      <section class="nav-group" data-group="素材">
+        <button type="button" class="nav-head">
+          <span class="nav-ico" aria-hidden="true">🎨</span><span class="nav-text">素材</span>
+          <i class="caret" aria-hidden="true"></i>
+        </button>
         <div class="nav-items">
-          <button type="button" class="nav-item" data-view="stickers">表情包库</button>
+          <button type="button" class="nav-item" data-view="stickers" title="表情包库">
+            <span class="nav-ico" aria-hidden="true">😀</span><span class="nav-text">表情包库</span>
+          </button>
         </div>
       </section>
 
-      <section class="nav-group">
-        <button type="button" class="nav-head">文件<i class="caret" aria-hidden="true"></i></button>
+      <section class="nav-group" data-group="文件">
+        <button type="button" class="nav-head">
+          <span class="nav-ico" aria-hidden="true">📄</span><span class="nav-text">文件</span>
+          <i class="caret" aria-hidden="true"></i>
+        </button>
         <div class="nav-items">
-          <button type="button" class="nav-item" data-view="workspace">工作区文件</button>
-          <button type="button" class="nav-item" data-view="sessions">会话存档</button>
+          <button type="button" class="nav-item" data-view="knowledge" title="知识库文档">
+            <span class="nav-ico" aria-hidden="true">📚</span><span class="nav-text">知识库文档</span>
+          </button>
+          <button type="button" class="nav-item" data-view="workspace" title="工作区文件">
+            <span class="nav-ico" aria-hidden="true">📁</span><span class="nav-text">工作区文件</span>
+          </button>
+          <button type="button" class="nav-item" data-view="sessions" title="会话存档">
+            <span class="nav-ico" aria-hidden="true">💾</span><span class="nav-text">会话存档</span>
+          </button>
         </div>
       </section>
 
-      <section class="nav-group">
-        <button type="button" class="nav-head">系统<i class="caret" aria-hidden="true"></i></button>
+      <section class="nav-group" data-group="系统">
+        <button type="button" class="nav-head">
+          <span class="nav-ico" aria-hidden="true">⚙️</span><span class="nav-text">系统</span>
+          <i class="caret" aria-hidden="true"></i>
+        </button>
         <div class="nav-items">
-          <button type="button" class="nav-item" data-view="update">检查更新</button>
+          <button type="button" class="nav-item" data-view="update" title="检查更新">
+            <span class="nav-ico" aria-hidden="true">🔄</span><span class="nav-text">检查更新</span>
+          </button>
         </div>
       </section>
     </nav>
@@ -133,6 +171,25 @@
           <button type="button" id="save-models">保存模型</button>
           <p class="hint" id="history-hint"></p>
           <div class="chips" id="history-chips"></div>
+        </div>
+
+        <div class="card">
+          <h2>上下文与自动压缩</h2>
+          <label>模型上下文窗口（token）
+            <input id="context-limit" inputmode="numeric" autocomplete="off"
+                   placeholder="65536">
+          </label>
+          <button type="button" id="save-context">保存上下文上限</button>
+          <p class="hint" id="context-state"></p>
+          <p class="hint">
+            聊天页那个「上下文 xx%」和自动压缩都按这个数算，照模型的官方文档填
+            （DeepSeek V3 这类是 64K，GLM-4 这类是 128K）。<br>
+            历史用到窗口的 <b>80%</b>（<code>config.py</code> 里的
+            <code>CONTEXT_COMPRESS_AT</code>）时，塔菲会把较早那段聊过的内容交给模型压成
+            一段摘要，只留最近几条原文，免得请求被模型以「超长」直接拒掉。
+            压缩用的就是上面那个聊天模型。<br>
+            改完立刻生效，不用重启。
+          </p>
         </div>
       </section>
 
@@ -248,6 +305,34 @@
         <div class="card">
           <h2>库里的表情包（<span id="sticker-total">?</span> 张）</h2>
           <div id="sticker-library"></div>
+        </div>
+      </section>
+
+      <!-- ---------- 知识库文档 ---------- -->
+      <section class="view" data-view="knowledge" hidden>
+        <div class="card">
+          <h2>上传文档到知识库</h2>
+          <label>目标路径（相对 knowledge/，可以带子目录）
+            <input id="kn-path" placeholder="books/新教材.pdf" autocomplete="off">
+          </label>
+          <label>文件
+            <input type="file" id="kn-file">
+          </label>
+          <button type="button" id="kn-upload">上传</button>
+          <p class="hint">
+            <code>knowledge/</code> 就是塔菲检索用的那堆原始文档。传到子目录（比如
+            <code>books/</code>）也能被扫到。<br>
+            <b>传完 / 删完会自动重启服务重新建索引</b>——索引是进程内建的（见
+            <code>kb/index.py</code>），不重启看不到新文件；连着传好几个只会重启一次
+            （8 秒内没有新改动才动手）。<br>
+            单个文件上限 200MB（流式落盘，不吃内存）。索引状态：<span id="kn-status">…</span>
+          </p>
+        </div>
+
+        <div class="card">
+          <h2>库里的文档（<span id="kn-count">?</span> 个 · <span id="kn-total">?</span>）</h2>
+          <div class="rows" id="kn-list"></div>
+          <p class="hint" id="kn-hint"></p>
         </div>
       </section>
 

@@ -16,6 +16,7 @@ import threading
 from .config import (
     API_KEY,
     BASE_URL,
+    CONTEXT_LIMIT,
     EMBED_API_KEY,
     EMBED_BASE_URL,
     EMBED_MODEL,
@@ -72,6 +73,7 @@ def _load():
         "vision_model": str(raw.get("vision_model") or ""),
         "translate_model": str(raw.get("translate_model") or ""),
         "update_remote": str(raw.get("update_remote") or ""),
+        "context_limit": raw.get("context_limit") or 0,
         "model_history": [m for m in history if isinstance(m, str)] if isinstance(history, list) else [],
     }
     return _cache
@@ -299,4 +301,30 @@ def set_update_remote(name):
     with _lock:
         data = _load()
         data["update_remote"] = name
+        _write(data)
+
+
+# ---------- 对话上下文 ----------
+# 模型能吃多少 token。聊天页那个「上下文 xx%」和自动压缩都按它算（见 taffy/context.py）。
+
+def context_limit():
+    """当前生效的上下文窗口大小（token）。后台没配过就用 config.py / .env 里的。"""
+    try:
+        value = int(_load()["context_limit"])
+    except (TypeError, ValueError):
+        value = 0
+    return value if value > 0 else CONTEXT_LIMIT
+
+
+def set_context_limit(value):
+    """改上下文窗口大小。存下来立刻生效——每次估算都现问一次。"""
+    try:
+        value = int(value)
+    except (TypeError, ValueError):
+        return
+    if value <= 0:
+        return
+    with _lock:
+        data = _load()
+        data["context_limit"] = value
         _write(data)

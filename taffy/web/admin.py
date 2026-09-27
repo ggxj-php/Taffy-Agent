@@ -21,7 +21,7 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
 from .. import settings
-from ..config import ADMIN_PASSWORD_PREFIX, EMBED_DIM
+from ..config import ADMIN_PASSWORD_PREFIX, CONTEXT_COMPRESS_AT, EMBED_DIM
 from ..kb import stats as kb_stats
 from . import sysinfo, update
 
@@ -109,6 +109,9 @@ def _state():
         "embed_base_source": settings.embed_base_source(),
         "embed_dim": EMBED_DIM,
         "kb": kb_stats(),
+        # 对话上下文：模型的窗口有多大（聊天页那个百分比和自动压缩都按它算）
+        "context_limit": settings.context_limit(),
+        "context_compress_at": CONTEXT_COMPRESS_AT,
         # 检查更新那一页记住的厂家
         "update_remote": settings.update_remote(),
         "update_remotes": list(settings.UPDATE_REMOTES),
@@ -262,4 +265,28 @@ def save_embed(req: EmbedRequest, request: Request):
     if not (model or base or key):
         raise HTTPException(status_code=400, detail="一个都没填，那就先不动它喵")
     settings.update_embed(model, base, key)
+    return _state()
+
+
+# ---------- 对话上下文 ----------
+# 模型的上下文窗口有多大。聊天页那个「上下文 xx%」和自动压缩（见 taffy/context.py）
+# 都按这个数算，改完立刻生效，不用重启。
+
+CONTEXT_MIN = 4096
+CONTEXT_MAX = 2_000_000
+
+
+class ContextRequest(BaseModel):
+    limit: int = 0
+
+
+@router.post("/api/admin/context")
+def save_context(req: ContextRequest, request: Request):
+    _require(request)
+    if not CONTEXT_MIN <= req.limit <= CONTEXT_MAX:
+        raise HTTPException(
+            status_code=400,
+            detail=f"上下文上限得在 {CONTEXT_MIN} ~ {CONTEXT_MAX} 之间喵",
+        )
+    settings.set_context_limit(req.limit)
     return _state()

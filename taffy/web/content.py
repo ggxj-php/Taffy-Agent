@@ -1,4 +1,4 @@
-"""后台的内容管理接口：表情包库、workspace 文件、会话存档。
+"""后台的内容管理接口：表情包库、workspace 文件、会话存档、知识库文档。
 
 跟 admin.py 分开写只是为了让文件别太长：这块是「素材和文件」，那边是「配置和系统」。
 登录校验直接复用 admin.py 的那一套。
@@ -8,15 +8,18 @@
 落盘全是流式的（一块 64KB），绝不吃内存。
 """
 import os
+import shutil
 import tempfile
+import threading
 
 from fastapi import APIRouter, HTTPException, Request, Query
 from pydantic import BaseModel
 
-from ..config import SESSIONS_DIR
+from ..config import KNOWLEDGE_DIR, SESSIONS_DIR
+from ..kb import loader as kb_loader
 from ..sandbox import WORKSPACE, safe_path
 from ..tools.files import delete_file
-from . import sessions_store, stickers
+from . import sessions_store, stickers, update
 from .admin import _require
 
 router = APIRouter()
@@ -227,3 +230,137 @@ def sessions_delete(req: SessionName, request: Request):
     except FileNotFoundError:
         raise HTTPException(status_code=404, detail="没有这份存档喵")
     return {"ok": True, "removed": removed}
+
+
+# ---------- 知识库文档 ----------
+# knowledge/ 里放的就是检索用的原始文档。索引是**进程内**的（见 kb/index.py 的 _scan），
+# 所以传完、删完都得重启服务才会重新扫一遍——这里改成「改完隔一会儿没新动静就自动重启」，
+# 一次传好几个文件也只重启一次。
+
+MAX_KNOWLEDGE_BYTES = 200 * 1024 * 1024   # 单个文档上限（流式落盘，不吃内存）
+MAX_KNOWLEDGE_LIST = 2000                 # 最多列这么多条
+RESTART_DELAY = 8.0                       # 改完隔这么久没新动静就重启
+
+_restart_timer = None
+_restart_lock = threading.Lock()
+
+
+def _kn_path(rel):
+    """把相对路径解析到 knowledge/ 里面，越界（../ 之类）直接报错。"""
+    rel = (rel or "").replace("\\", "/").strip().lstrip("/")
+    full = os.path.normpath(os.path.join(KNOWLEDGE_DIR, rel))
+    root = os.path.normpath(KNOWLEDGE_DIR)
+    if full != root and not full.startswith(root + os.sep):
+        raise HTTPException(status_code=400, detail="路径得在 knowledge/ 里面喵")
+    return full, rel
+
+
+def _schedule_restart():
+    """安排一次重启，返回「能不能自动重启」。
+
+    计时器每次都会被推后，所以连着传几个文件最后只重启一次。服务不是 systemd 管的
+    就返回 False，前端会提示「自己重启一下」。
+    """
+    global _restart_timer
+    if not update.service_active():
+        return False
+    with _restart_lock:
+        if _restart_timer is not None:
+            _restart_timer.cancel()
+        _restart_timer = update.restart_later(RESTART_DELAY)
+    return True
+
+
+def _restart_note(auto):
+    if auto:
+        return (f"知识库改好了喵，{int(RESTART_DELAY)} 秒内没有新改动就自动重启、"
+                "重新建索引（聊天会断一下，之后就是新的了）。")
+    return (f"知识库改好了喵，但没检测到 systemd 在管 {update.SERVICE_NAME} 这个服务，"
+            "自动重启不了——自己重启一下才进索引（索引是进程内建的）。")
+
+
+@router.get("/api/admin/knowledge")
+def knowledge_list(request: Request):
+    """列 knowledge/ 里的文档（递归）。跟检索用的是同一批文件。"""
+    _require(request)
+    os.makedirs(KNOWLEDGE_DIR, exist_ok=True)
+    files = []
+    total = 0
+    for folder, _, names in os.walk(KNOWLEDGE_DIR):
+        for name in names:
+            full = os.path.join(folder, name)
+            if os.path.islink(full):     # 软链接不碰（可能指到知识库外面）
+                continue
+            try:
+                stat = os.stat(full)
+            except OSError:
+                continue
+            files.append({
+                "path": os.path.relpath(full, KNOWLEDGE_DIR).replace("\\", "/"),
+                "size": stat.st_size,
+                "mtime": int(stat.st_mtime),
+                "supported": kb_loader.supported(name),
+            })
+            total += stat.st_size
+    files.sort(key=lambda item: item["path"])
+    truncated = len(files) > MAX_KNOWLEDGE_LIST
+    return {
+        "dir": KNOWLEDGE_DIR,
+        "files": files[:MAX_KNOWLEDGE_LIST],
+        "total_bytes": total,
+        "truncated": truncated,
+        "extensions": list(kb_loader.extensions()),
+        "max_bytes": MAX_KNOWLEDGE_BYTES,
+    }
+
+
+@router.post("/api/admin/knowledge/upload")
+async def knowledge_upload(request: Request, path: str = Query("")):
+    """传一个文档进 knowledge/。path 是相对 knowledge/ 的目标路径，可以带子目录。"""
+    _require(request)
+    rel = (path or "").replace("\\", "/").strip().lstrip("/")
+    if not rel or rel.endswith("/"):
+        raise HTTPException(status_code=400, detail="得给个文件名喵，比如 books/新书.pdf")
+    if not kb_loader.supported(os.path.basename(rel)):
+        raise HTTPException(
+            status_code=400,
+            detail=f"这个格式进不了索引喵，只认：{'、'.join(kb_loader.extensions())}",
+        )
+    target, rel = _kn_path(rel)
+    if os.path.isdir(target):
+        raise HTTPException(status_code=400, detail=f"{rel} 是个目录喵，得给个文件名")
+    parent = os.path.dirname(target)
+    if parent:
+        os.makedirs(parent, exist_ok=True)
+    size = await _save_body(request, target, MAX_KNOWLEDGE_BYTES, "这个文档")
+    auto = _schedule_restart()
+    return {"ok": True, "path": rel, "size": size,
+            "restart": auto, "message": _restart_note(auto)}
+
+
+@router.post("/api/admin/knowledge/delete")
+def knowledge_delete(req: WorkspaceDelete, request: Request):
+    """删文档；删目录要带 recursive=True。删不掉的（越界、软链接）一律拒绝。"""
+    _require(request)
+    full, rel = _kn_path(req.path)
+    if not rel:
+        raise HTTPException(status_code=400, detail="得指定删哪个文件喵")
+    if full == os.path.normpath(KNOWLEDGE_DIR):
+        raise HTTPException(status_code=400, detail="不能把整个知识库删掉喵")
+    if os.path.islink(full):
+        raise HTTPException(status_code=400, detail="这是个软链接喵，塔菲不敢动")
+    if not os.path.exists(full):
+        raise HTTPException(status_code=404, detail=f"没有这个文件喵：{rel}")
+    try:
+        if os.path.isdir(full):
+            if not req.recursive:
+                raise HTTPException(status_code=400,
+                                    detail=f"{rel} 是个目录喵，要删得选「整目录一起删」")
+            shutil.rmtree(full)
+        else:
+            os.remove(full)
+    except OSError as exc:
+        raise HTTPException(status_code=400, detail=f"删不掉：{exc}")
+    auto = _schedule_restart()
+    return {"ok": True, "removed": rel,
+            "restart": auto, "message": _restart_note(auto)}

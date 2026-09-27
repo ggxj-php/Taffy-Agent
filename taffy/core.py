@@ -3,7 +3,7 @@
 对外主要是 ask_stream()：它是一个事件生成器，把思考、正文、工具调用逐段吐出来。
 终端（ask/run）和网页后端都消费同一套事件，行为完全一致。
 """
-from . import settings
+from . import context, settings
 from .config import EXIT_WORDS, MAX_ROUNDS, SYSTEM_PROMPT
 from .llm import stream_chat
 from .tools import TOOLS, execute
@@ -45,6 +45,10 @@ class TaffyAgent:
         # 第一条永远是系统提示词，网页版每个会话都从这句开始，不会丢人设
         self.messages = [{"role": "system", "content": SYSTEM_PROMPT}]
 
+    def context_usage(self):
+        """当前上下文用量，网页版拿它显示「上下文 xx%」。"""
+        return context.usage(self.messages, settings.context_limit())
+
     def ask_stream(self, user_input: str, image: str = None):
         """把用户这句话丢给模型，边跑边吐事件，最多跑 MAX_ROUNDS 轮工具。
 
@@ -58,9 +62,16 @@ class TaffyAgent:
           tool_start  {name, arguments}            模型决定调用工具
           tool_end    {name, args, result}         工具执行完的结果
           sticker     {mood}                       塔菲发了一张表情包
+          compressed  {dropped, before_tokens, ...} 历史太长，旧的那段被压成摘要了
           error       {message}                    出错了
-          done        {}                           这一轮结束
+          done        {context}                    这一轮结束（附带当前上下文用量）
         """
+        # 历史快把模型的上下文窗口填满时，先把旧的那段压成摘要（见 taffy/context.py）。
+        # 放在追加用户消息之前：这句刚说的话不该被压掉。压失败也照常往下走。
+        squeezed = context.compress_if_needed(self.messages)
+        if squeezed and squeezed.get("ok"):
+            yield {"type": "compressed", **squeezed}
+
         image_slot = None
         if image:
             if not _valid_image(image):
@@ -115,7 +126,7 @@ class TaffyAgent:
                 self.messages.append(message)
                 calls = message.get("tool_calls")
                 if not calls:
-                    yield {"type": "done"}
+                    yield {"type": "done", "context": self.context_usage()}
                     return
 
                 for call in calls:
@@ -138,7 +149,7 @@ class TaffyAgent:
                     })
 
             yield {"type": "content", "text": "喵呜…工具调太多次了，塔菲脑子转不动了喵"}
-            yield {"type": "done"}
+            yield {"type": "done", "context": self.context_usage()}
         finally:
             # 图看完了就把原始数据抹掉，history 里只留一句说明
             if image_slot is not None:

@@ -15,6 +15,8 @@ from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
+from .. import settings
+from ..config import CONTEXT_COMPRESS_AT
 from ..core import TaffyAgent
 from ..kb import warmup
 from . import sessions_store, stickers
@@ -86,6 +88,21 @@ def new_session():
     session_id = uuid.uuid4().hex
     _session(session_id)
     return {"session_id": session_id}
+
+
+@app.get("/api/context")
+def context_state(session_id: str = ""):
+    """聊天页那个「上下文 xx%」：这段历史估出来用了多少 token、占窗口的几成。
+
+    没聊过的会话就返回 known=false，前端显示 0% 或者干脆不显示（见 taffy/context.py）。
+    """
+    limit = settings.context_limit()
+    with _sessions_lock:
+        entry = _sessions.get(session_id)
+    if entry is None:
+        return {"known": False, "tokens": 0, "limit": limit, "percent": 0.0,
+                "compress_at": CONTEXT_COMPRESS_AT, "messages": 0}
+    return {"known": True, **entry["agent"].context_usage()}
 
 
 class SaveRequest(BaseModel):
