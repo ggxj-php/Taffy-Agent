@@ -336,7 +336,7 @@
         </div>
 
         <div class="card">
-          <h2>库里的文档（<span id="kn-count">?</span> 个 · <span id="kn-total">?</span>）</h2>
+          <h2>库里的文档（<span id="kn-count">—</span> 个 · <span id="kn-total">—</span>）</h2>
           <div class="rows" id="kn-list"></div>
           <p class="hint" id="kn-hint"></p>
         </div>
@@ -401,6 +401,10 @@
             更新就是在这个仓库里跑 <code>git pull --ff-only</code>：只在能快进时才动，
             本地改过的东西一律不覆盖，也绝不 force。拉完会自动重启服务（<code>systemctl</code>），
             页面会断一下，刷新就好。<br>
+            <b>拉下来 ≠ 立刻生效</b>：新代码要等进程重启才跑得起来。不是 systemd 管的话
+            它会告诉你「自己重启一下」——不重启的话，页面（静态文件）是新的、后端还是旧的，
+            会看到「接口 404」「数字对不上」这种怪事。<b>重启完记得刷新页面</b>，
+            浏览器可能还留着旧的前端文件。<br>
             要能从 Gitee / GitHub 拉，前提是这份部署本身是 <code>git clone</code> 出来的，
             而且这台机器连得上那个站点。<b>只 clone 了其中一个也没关系</b>：仓库里找不到
             对应厂家的 remote 时，会直接用 <code>config.py</code> 里那份镜像地址去拉

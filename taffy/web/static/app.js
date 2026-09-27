@@ -71,6 +71,8 @@ const loadCancelEl = document.getElementById('load-cancel');
 const ctxBarEl = document.getElementById('ctx-bar');
 const ctxFillEl = document.getElementById('ctx-fill');
 const ctxTextEl = document.getElementById('ctx-text');
+const tbMoreEl = document.getElementById('tb-more');
+const tbActionsEl = document.getElementById('tb-actions');
 
 let sessionId = sessionStorage.getItem(STORAGE_KEY);
 let busy = false;
@@ -716,6 +718,33 @@ function saveMsg(text, ok) {
   saveMsgEl.classList.toggle('bad', ok === false);
 }
 
+/* ---------------- 顶栏「⋯」更多菜单（窄屏才出现） ----------------
+   手机顶栏放不下三个按钮，就把「导入 / 保存」收进这里。宽屏上 CSS 直接让
+   .tb-actions 一直显示，这个菜单开关对它没影响。 */
+
+function closeMore() {
+  tbActionsEl.classList.remove('open');
+  tbMoreEl.setAttribute('aria-expanded', 'false');
+}
+
+tbMoreEl.addEventListener('click', (event) => {
+  event.stopPropagation();          // 别让下面那个「点别处收起」立刻又把它关掉
+  const open = tbActionsEl.classList.toggle('open');
+  tbMoreEl.setAttribute('aria-expanded', String(open));
+});
+
+tbActionsEl.addEventListener('click', closeMore);   // 选完就收起
+
+document.addEventListener('click', (event) => {
+  if (!tbActionsEl.classList.contains('open')) return;
+  if (tbActionsEl.contains(event.target) || tbMoreEl.contains(event.target)) return;
+  closeMore();
+});
+
+document.addEventListener('keydown', (event) => {
+  if (event.key === 'Escape') closeMore();
+});
+
 function openSaveModal() {
   if (busy) {
     statusEl.textContent = '等塔菲说完这句再存喵';
@@ -936,8 +965,8 @@ function welcome() {
     '雏草姬来啦喵～我是永雏塔菲，有什么想聊的直接说就好喵。\n\n' +
     '算法题、代码、知识库里的资料都可以问我；嵌入式、单片机（STM32 那种）、物联网、' +
     '计算机组成原理、数字取证这些塔菲也懂喵。左下角可以发图片给塔菲看（看完就删，不会留着）；' +
-    '想把这段聊天存下来就点右上角「保存上下文」（要你自己起个名字）；下次点「导入上下文」' +
-    '填那个名字，塔菲就能把这段对话连上下文用量一起接回来；' +
+    '想把这段聊天存下来就点右上角「保存上下文」（手机上收在右上角那个「⋯」里）；' +
+    '下次点「导入上下文」填那个名字，塔菲就能把这段对话连上下文用量一起接回来；' +
     '想换个话题就点「新会话」，塔菲会把之前的事忘干净从头开始喵～\n\n' +
     '输入框上面那条是这段对话占了多少「上下文」，快满的时候塔菲会自己把前面聊过的' +
     '压成摘要，不会聊着聊着就卡住喵。'

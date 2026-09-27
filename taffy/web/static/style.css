@@ -34,6 +34,7 @@ body {
 /* ---------- 顶栏 ---------- */
 .topbar {
   flex: none;
+  position: relative;          /* 手机上那个「更多」下拉要挂在它下面 */
   display: flex;
   align-items: center;
   gap: 10px;
@@ -88,6 +89,16 @@ body {
   border: 1px solid var(--line);
   box-shadow: none;
 }
+
+/* 顶栏右边那组按钮：桌面端直接并排显示，手机上收进「⋯」下拉（见下面的小屏规则） */
+.tb-actions {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.tb-more { display: none; }        /* 平时藏着，只有窄屏才露出来 */
 
 /* ---------- 保存上下文的小弹窗 ---------- */
 
@@ -674,6 +685,39 @@ body {
   font-size: 13px;
   line-height: 1;
   cursor: pointer;
+}
+
+/* ---------- 窄屏（手机）：顶栏收成一个「⋯」 ----------
+   手机上「导入上下文 / 保存上下文 / 新会话」三个按钮并排会把标题挤没，
+   所以只留「新会话」，另外两个收进「⋯」下拉，点一下才展开。 */
+@media (max-width: 719px) {
+  .tb-more { display: inline-block; }
+
+  .tb-actions {
+    position: absolute;
+    z-index: 6;
+    top: calc(100% + 6px);
+    right: 12px;
+    display: none;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 6px;
+    padding: 8px;
+    min-width: 150px;
+    background: #fff;
+    border: 1px solid var(--line);
+    border-radius: 14px;
+    box-shadow: 0 10px 26px rgba(224, 114, 159, .28);
+  }
+
+  .tb-actions.open { display: flex; }
+
+  .tb-actions .new-chat { width: 100%; text-align: center; }
+
+  /* 上下文那条在最上面，手机上稍微做大一点、加粗，别让人看不见 */
+  .ctx-bar { padding: 6px 12px 0; font-size: 12px; gap: 7px; }
+  .ctx-track { height: 6px; }
+  .ctx-text { font-weight: 600; color: var(--pink-deep); }
 }
 
 /* ---------- 桌面端 ---------- */

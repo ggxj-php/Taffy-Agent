@@ -39,6 +39,21 @@ app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 app.include_router(admin_router)
 app.include_router(content_router)
 
+
+@app.middleware("http")
+async def no_stale_frontend(request, call_next):
+    """页面和静态资源一律「每次先问服务器再用缓存」。
+
+    不带 Cache-Control 时浏览器会自己猜一个缓存时长（按 last-modified 推），
+    于是更新完代码后常常还是拿旧的 app.js / admin.html：页面看着是旧的、接口却是新的，
+    查起来特别费劲。这里统一让它们带 ETag 回来校验——没变就 304，几乎不花流量。
+    """
+    response = await call_next(request)
+    path = request.url.path
+    if path.startswith("/static/") or path in ("/", "/admin"):
+        response.headers["Cache-Control"] = "no-cache"
+    return response
+
 # session_id -> {"agent": TaffyAgent, "lock": Lock}
 _sessions = {}
 _sessions_lock = threading.Lock()

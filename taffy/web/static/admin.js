@@ -165,12 +165,29 @@ async function readResponse(resp) {
     data = null;
   }
   if (!resp.ok) {
-    const error = new Error(data && data.detail ? data.detail : `服务返回 ${resp.status}`);
-    error.status = resp.status;
-    error.data = data;
-    throw error;
+    throw makeError(resp.status, data && data.detail);
   }
   return data;
+}
+
+/* 把后端的报错翻成人话。最要紧的是 404：FastAPI 只会甩一句 "Not Found"，
+   但后台看到这个几乎只有一个原因——服务拉完新代码还没重启，跑的还是旧 Python，
+   所以新页面上新加的接口它不认识。这里直接把这句话说清楚，别让人猜。 */
+function makeError(status, detail) {
+  const raw = typeof detail === 'string' ? detail.trim() : '';
+  let message = raw || `服务返回 ${status}`;
+  if (status === 404 && (!raw || raw === 'Not Found')) {
+    message = '后台不认识这个接口（404）——多半是服务拉完新代码还没重启，' +
+      '跑的还是旧进程：重启一下服务、再刷新这个页面就好喵。';
+  } else if (status === 401) {
+    message = raw || '登录状态过期了，重新登一次喵';
+  } else if (status === 502 || status === 503 || status === 504) {
+    message = `服务现在不在（${status}）——可能正在重启，等几秒刷新看看喵。`;
+  }
+  const error = new Error(message);
+  error.status = status;
+  error.data = detail;
+  return error;
 }
 
 function guard(err) {
@@ -786,6 +803,16 @@ async function loadKnowledge() {
       `认的格式：${(data.extensions || []).join(' / ')}；单个上限 ${fmtSize(data.max_bytes)}。`;
     refreshKbStatus();
   } catch (err) {
+    // 拿不到就别把标题那行「— 个」留着不管：写清楚为什么，别让人对着问号猜
+    knCountEl.textContent = '—';
+    knTotalEl.textContent = '—';
+    knHintEl.textContent = '';
+    knListEl.innerHTML = '';
+    if (!err || err.status !== 401) {
+      const bad = el('div', 'row empty');
+      bad.textContent = err.message;
+      knListEl.appendChild(bad);
+    }
     guard(err);
   }
 }
