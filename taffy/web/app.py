@@ -10,14 +10,16 @@ import threading
 import uuid
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from ..core import TaffyAgent
 from ..kb import warmup
+from . import sessions_store, stickers
 from .admin import router as admin_router
+from .content import router as content_router
 
 STATIC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
 
@@ -31,8 +33,9 @@ async def lifespan(_app):
 
 app = FastAPI(title="Taffy Agent", lifespan=lifespan)
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
-# 后台管理：/admin 页面 + /api/admin/* 接口
+# 后台管理：/admin 页面 + /api/admin/* 接口（配置与系统、内容管理两块）
 app.include_router(admin_router)
+app.include_router(content_router)
 
 # session_id -> {"agent": TaffyAgent, "lock": Lock}
 _sessions = {}
@@ -67,12 +70,52 @@ def ping():
     return {"ok": True}
 
 
+@app.get("/api/stickers")
+def sticker_library():
+    """网页聊天要的表情包清单：{心情: [文件名, ...]}。
+
+    直接读目录，所以后台往库里加一张、网页刷新一下就多一张；文件名带后缀，
+    gif 那边就能当动图播。不带登录校验——这些文件本来就在 /static 下公开。
+    """
+    return stickers.library()["moods"]
+
+
 @app.post("/api/session")
 def new_session():
     """开一个新会话，返回它的 id。"""
     session_id = uuid.uuid4().hex
     _session(session_id)
     return {"session_id": session_id}
+
+
+class SaveRequest(BaseModel):
+    session_id: str
+    uuid: str = ""
+
+
+@app.post("/api/session/save")
+def save_session(req: SaveRequest):
+    """把这轮会话的上下文存成 txt（存文件，不占内存），见 web/sessions_store.py。
+
+    uuid 是主人自己起的文件名，所以要先查重：重了返回 409，让前端换个名字，
+    绝不覆盖已经存过的那一份。
+    """
+    with _sessions_lock:
+        entry = _sessions.get(req.session_id)
+    if entry is None:
+        raise HTTPException(status_code=404, detail="这个会话还没聊过喵，先说句话再存")
+    agent = entry["agent"]
+    # 浅拷贝一份再写：万一一轮回复正在追加历史，也不会写进去半条
+    messages = list(agent.messages)
+    try:
+        return sessions_store.save(req.uuid, messages)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except FileExistsError:
+        raise HTTPException(
+            status_code=409,
+            detail=f"已经有一份叫「{req.uuid}」的存档了喵，换个 uuid 再存（不会覆盖原来那份）",
+        )
 
 
 @app.post("/api/chat")

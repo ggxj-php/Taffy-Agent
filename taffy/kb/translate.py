@@ -8,9 +8,10 @@
 和向量那一路的关系：检索时**原查询永远单独占一路**，英文那一路只是往结果里补，
 所以结构上不可能比现在差——原来的中文资料一个都不会被挤掉。
 
-走哪套连接：聊天那套的接口地址和 key（模型名可以在后台单独指定，指到又小又快的
-模型上就行）。凭什么失败都退回原查询：没配 key、接口挂了、返回的东西看不懂、
-模型不听话回了中文——一律返回空，检索照常只用原查询，绝不让翻译把检索搞挂。
+走哪套连接：默认是聊天那套的接口地址和 key，但模型名、地址、key 都能在后台单独指定
+（指到又小又快的模型上，或者指本机跑的小模型，省钱也不怕限流）。凭什么失败都退回原查询：
+没配 key、接口挂了、返回的东西看不懂、模型不听话回了中文——一律返回空，检索照常只用
+原查询，绝不让翻译把检索搞挂。
 """
 import re
 import threading
@@ -75,6 +76,8 @@ def to_english(query):
             [{"role": "system", "content": _SYSTEM},
              {"role": "user", "content": _TRIM.sub("", query) or query}],
             model=settings.translate_model(),
+            api_key=settings.translate_key(),
+            base_url=settings.translate_base_url(),
         )
     except Exception:
         return ""      # 接口挂了 / 没配 key —— 退回只用原查询，不要报错

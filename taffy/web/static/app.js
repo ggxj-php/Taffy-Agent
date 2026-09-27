@@ -8,17 +8,41 @@
 const STORAGE_KEY = 'taffy_session_id';
 const AVATAR = '/static/avatar.jpg';
 
-/* 每种心情对应几张真·塔菲表情包，发的时候随机挑一张 */
-const STICKERS = {
-  happy: ['happy1', 'happy2', 'happy3'],
-  think: ['think1', 'think2', 'think3'],
-  confused: ['confused1', 'confused2', 'confused3'],
-  proud: ['proud1', 'proud2', 'proud3'],
-  cry: ['cry1', 'cry2'],
-  angry: ['angry1', 'angry2', 'angry3'],
-  sleepy: ['sleepy1', 'sleepy2'],
-  love: ['love1', 'love2', 'love3'],
+/* 表情包清单从后端读（后台可以增删，加了新的刷新一下就有）。
+   读不到就用下面这份内置的兜底，反正不能因为接口挂了就不发表情包。
+   文件名带后缀，所以 gif 直接就是动图。 */
+const FALLBACK_STICKERS = {
+  happy: ['happy1.png', 'happy2.png', 'happy3.png'],
+  think: ['think1.png', 'think2.png', 'think3.png'],
+  confused: ['confused1.png', 'confused2.png', 'confused3.png'],
+  proud: ['proud1.png', 'proud2.png', 'proud3.png'],
+  cry: ['cry1.png', 'cry2.png'],
+  angry: ['angry1.png', 'angry2.png', 'angry3.png'],
+  sleepy: ['sleepy1.png', 'sleepy2.png'],
+  love: ['love1.png', 'love2.png', 'love3.png'],
 };
+
+let stickerLib = null;
+
+async function loadStickerLib() {
+  try {
+    const resp = await fetch('/api/stickers', { cache: 'no-store' });
+    if (resp.ok) {
+      const data = await resp.json();
+      if (data && typeof data === 'object') stickerLib = data;
+    }
+  } catch (err) {
+    /* 用兜底那份 */
+  }
+}
+
+function stickerPool(mood) {
+  const fromServer = stickerLib && stickerLib[mood];
+  if (fromServer && fromServer.length) {
+    return fromServer.map((item) => item.name || item);
+  }
+  return FALLBACK_STICKERS[mood] || [];
+}
 
 const messagesEl = document.getElementById('messages');
 const formEl = document.getElementById('composer');
@@ -32,9 +56,16 @@ const imageInputEl = document.getElementById('image-input');
 const attachBarEl = document.getElementById('attach-bar');
 const attachPreviewEl = document.getElementById('attach-preview');
 const attachRemoveEl = document.getElementById('attach-remove');
+const saveSessionEl = document.getElementById('save-session');
+const saveModalEl = document.getElementById('save-modal');
+const saveUuidEl = document.getElementById('save-uuid');
+const saveMsgEl = document.getElementById('save-msg');
+const saveOkEl = document.getElementById('save-ok');
+const saveCancelEl = document.getElementById('save-cancel');
 
 let sessionId = sessionStorage.getItem(STORAGE_KEY);
 let busy = false;
+let sentCount = 0;       // 这个页面聊过几句，存上下文之前用它判断有没有东西可存
 let pendingImage = null; // 已经选好、还没发出去的图片（data URL）
 
 marked.setOptions({ gfm: true, breaks: true });
@@ -336,10 +367,11 @@ function addSticker(turn, mood) {
   settleThinking(turn);
   turn.content = null;
   const safe = String(mood).replace(/[^a-z]/gi, '');
-  const pool = STICKERS[safe];
-  if (!pool || !pool.length) return;
+  const pool = stickerPool(safe);
+  if (!pool.length) return;
+  const name = pool[Math.floor(Math.random() * pool.length)];
   const img = el('img', 'sticker');
-  img.src = `/static/stickers/${pool[Math.floor(Math.random() * pool.length)]}.png`;
+  img.src = `/static/stickers/${encodeURIComponent(name)}`;
   img.alt = mood;
   img.loading = 'lazy';
   img.addEventListener('error', () => img.remove());
@@ -512,6 +544,7 @@ window.addEventListener('pageshow', (e) => { if (e.persisted) resume(); });
 async function send(text, image) {
   if (busy) return;
   busy = true;
+  sentCount += 1;
   sendEl.disabled = true;
   pickImageEl.disabled = true;
   inputEl.value = '';
@@ -598,6 +631,104 @@ attachRemoveEl.addEventListener('click', () => {
   inputEl.focus();
 });
 
+/* ---------------- 保存上下文 ----------------
+   存成服务器上的一个 txt（见 taffy/web/sessions_store.py），历史不留在内存里。
+   uuid 由雏草姬自己起，重名后端会拒掉（409），不会覆盖旧存档。 */
+
+function fmtSize(bytes) {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+}
+
+function suggestUuid() {
+  const d = new Date();
+  const pad = (n) => String(n).padStart(2, '0');
+  const stamp = `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}`;
+  return `chat-${stamp}-${Math.random().toString(36).slice(2, 6)}`;
+}
+
+function saveMsg(text, ok) {
+  saveMsgEl.textContent = text;
+  saveMsgEl.classList.toggle('ok', ok === true);
+  saveMsgEl.classList.toggle('bad', ok === false);
+}
+
+function openSaveModal() {
+  if (busy) {
+    statusEl.textContent = '等塔菲说完这句再存喵';
+    return;
+  }
+  if (!sentCount) {
+    statusEl.textContent = '还没聊过喵，先说句话再存';
+    return;
+  }
+  saveUuidEl.value = suggestUuid();
+  saveMsg('');
+  saveModalEl.hidden = false;
+  saveUuidEl.focus();
+  saveUuidEl.select();
+}
+
+function closeSaveModal() {
+  saveModalEl.hidden = true;
+  inputEl.focus();
+}
+
+async function doSave() {
+  const uuid = saveUuidEl.value.trim();
+  if (!uuid) {
+    saveMsg('得给个 uuid 喵', false);
+    return;
+  }
+  // 跟后端同一套规矩，先在前端拦一道，省一次往返
+  if (uuid.indexOf('..') >= 0 || !/^[A-Za-z0-9][A-Za-z0-9._-]{1,63}$/.test(uuid)) {
+    saveMsg('只能用字母、数字和 . _ -（3~64 位，开头得是字母或数字）喵', false);
+    return;
+  }
+  saveOkEl.disabled = true;
+  saveMsg('正在存喵…');
+  try {
+    const id = await ensureSession();
+    const resp = await fetch('/api/session/save', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ session_id: id, uuid }),
+    });
+    let data = null;
+    try {
+      data = await resp.json();
+    } catch (err) {
+      data = null;
+    }
+    if (!resp.ok) {
+      saveMsg((data && data.detail) || `存不上，服务返回 ${resp.status}`, false);
+      return;
+    }
+    saveMsg(`存好啦喵：${data.file}（${data.messages} 条记录，${fmtSize(data.bytes)}）`, true);
+    setTimeout(closeSaveModal, 1400);
+  } catch (err) {
+    saveMsg(`存不上喵：${err && err.message ? err.message : err}`, false);
+  } finally {
+    saveOkEl.disabled = false;
+  }
+}
+
+saveSessionEl.addEventListener('click', openSaveModal);
+saveCancelEl.addEventListener('click', closeSaveModal);
+saveOkEl.addEventListener('click', doSave);
+saveModalEl.addEventListener('click', (event) => {
+  if (event.target === saveModalEl) closeSaveModal();   // 点遮罩关掉
+});
+saveUuidEl.addEventListener('keydown', (event) => {
+  if (event.key === 'Enter') {
+    event.preventDefault();
+    doSave();
+  } else if (event.key === 'Escape') {
+    closeSaveModal();
+  }
+});
+
 /* 回车不发送，老老实实在输入框里换行；要发就点「发送」按钮。
    手机端也一样，软键盘的回车键只负责换行，不会手滑把半句话发出去。 */
 formEl.addEventListener('submit', (e) => {
@@ -632,11 +763,13 @@ function welcome() {
     '雏草姬来啦喵～我是永雏塔菲，有什么想聊的直接说就好喵。\n\n' +
     '算法题、代码、知识库里的资料都可以问我；嵌入式、单片机（STM32 那种）、物联网、' +
     '计算机组成原理、数字取证这些塔菲也懂喵。左下角可以发图片给塔菲看（看完就删，不会留着）；' +
-    '想换个话题就点右上角「新会话」，塔菲会把之前的事忘干净从头开始喵～'
+    '想把这段聊天存下来就点右上角「保存上下文」，塔菲会存成一份 txt（要你自己起个名字）；' +
+    '想换个话题就点「新会话」，塔菲会把之前的事忘干净从头开始喵～'
   );
 }
 
 (async function init() {
+  loadStickerLib();   // 不等它，表情包清单到了就用新的，没到就用兜底那份
   try {
     await ensureSession();
     welcome();

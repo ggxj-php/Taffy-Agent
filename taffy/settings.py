@@ -22,6 +22,8 @@ from .config import (
     MODEL,
     PROJECT_ROOT,
     SEARCH_TRANSLATE_MODEL,
+    TRANSLATE_API_KEY,
+    TRANSLATE_BASE_URL,
     VISION_API_KEY,
     VISION_BASE_URL,
     VISION_MODEL,
@@ -31,6 +33,10 @@ SETTINGS_PATH = os.path.join(PROJECT_ROOT, "admin.json")
 
 # 历史模型列表最多留这么多条，免得越攒越长
 HISTORY_LIMIT = 30
+
+# 「检查更新」从哪拉：gitee（默认，国内服务器连得上）/ github
+UPDATE_REMOTES = ("gitee", "github")
+DEFAULT_UPDATE_REMOTE = "gitee"
 
 _lock = threading.Lock()
 _cache = None
@@ -57,12 +63,15 @@ def _load():
         "vision_key": str(raw.get("vision_key") or ""),
         "chat_base": str(raw.get("chat_base") or ""),
         "vision_base": str(raw.get("vision_base") or ""),
+        "translate_base": str(raw.get("translate_base") or ""),
+        "translate_key": str(raw.get("translate_key") or ""),
         "embed_key": str(raw.get("embed_key") or ""),
         "embed_base": str(raw.get("embed_base") or ""),
         "embed_model": str(raw.get("embed_model") or ""),
         "model": str(raw.get("model") or ""),
         "vision_model": str(raw.get("vision_model") or ""),
         "translate_model": str(raw.get("translate_model") or ""),
+        "update_remote": str(raw.get("update_remote") or ""),
         "model_history": [m for m in history if isinstance(m, str)] if isinstance(history, list) else [],
     }
     return _cache
@@ -186,7 +195,32 @@ def base_source(vision=False):
     return "admin" if _load()["vision_base" if vision else "chat_base"] else "default"
 
 
-def update_keys(chat_key_new, vision_key_new, chat_base, vision_base):
+# ---------- 检索翻译那一路的连接 ----------
+# 「查知识库之前把中文问题翻成英文关键词」用的（见 kb/translate.py）。默认跟聊天那套
+# 共用地址和 key，单独配是为了让它走另一家，或者本机跑的小模型（那样不花钱、也不怕限流）。
+
+def translate_base_url():
+    """翻译那一路的接口地址。没单独配就跟聊天那套一样。"""
+    return _load()["translate_base"] or TRANSLATE_BASE_URL or chat_base_url()
+
+
+def translate_key():
+    """翻译那一路的 key。没单独配就跟聊天那套一样。"""
+    return _load()["translate_key"] or TRANSLATE_API_KEY or chat_key()
+
+
+def translate_own_base():
+    """地址是不是单独配过（后台拿来提示用）。"""
+    return "admin" if _load()["translate_base"] else ("env" if TRANSLATE_BASE_URL else "chat")
+
+
+def translate_own_key():
+    """key 是不是单独配过。"""
+    return "admin" if _load()["translate_key"] else ("env" if TRANSLATE_API_KEY else "chat")
+
+
+def update_keys(chat_key_new, vision_key_new, chat_base, vision_base,
+                translate_key_new="", translate_base=""):
     """换 key / 换接口地址。
 
     每一项留空就表示「这项不改」——这样只想换聊天 key 的时候，不用把图片那套
@@ -202,6 +236,10 @@ def update_keys(chat_key_new, vision_key_new, chat_base, vision_base):
             data["chat_base"] = chat_base
         if vision_base:
             data["vision_base"] = vision_base
+        if translate_key_new:
+            data["translate_key"] = translate_key_new
+        if translate_base:
+            data["translate_base"] = translate_base
         _write(data)
 
 
@@ -242,4 +280,23 @@ def update_embed(model, base_url, key):
             data["embed_base"] = base_url
         if key:
             data["embed_key"] = key
+        _write(data)
+
+
+# ---------- 检查更新 ----------
+
+def update_remote():
+    """「检查更新」从哪拉：gitee / github。没配过就是 gitee。"""
+    name = _load()["update_remote"]
+    return name if name in UPDATE_REMOTES else DEFAULT_UPDATE_REMOTE
+
+
+def set_update_remote(name):
+    """记住了就存下来，下次打开后台还是它。"""
+    name = (name or "").strip().lower()
+    if name not in UPDATE_REMOTES:
+        return
+    with _lock:
+        data = _load()
+        data["update_remote"] = name
         _write(data)

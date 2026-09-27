@@ -99,10 +99,24 @@ KB_TRANSLATE_WEIGHT = 0.6
 KB_SPARSE_WEIGHT = 0.4
 
 # 检索前把中文问题翻成英文关键词用的模型（见 kb/translate.py）。留空 = 用聊天那个模型。
-# 走的是**聊天那套**的接口地址和 key，所以只能填聊天那家有的模型名；想省钱可以在这里
-# 指个小模型。平时在网页后台 /admin 里改，想在 .env 里配就加：
+# 默认走**聊天那套**的接口地址和 key，想省钱可以指个小模型；要让它走另一家（或者本机
+# 跑的小模型），就把下面那两行也配上。平时在网页后台 /admin 里改，想在 .env 里配就加：
 #   SEARCH_TRANSLATE_MODEL=glm-4.7-flash
+#   TRANSLATE_BASE_URL=http://127.0.0.1:11434/v1
+#   TRANSLATE_API_KEY=ollama
 SEARCH_TRANSLATE_MODEL = os.environ.get("SEARCH_TRANSLATE_MODEL", "").strip()
+TRANSLATE_BASE_URL = os.environ.get("TRANSLATE_BASE_URL", "").strip()
+TRANSLATE_API_KEY = os.environ.get("TRANSLATE_API_KEY", "").strip()
+
+# ---------- 网页版 ----------
+# 网页版「保存上下文」存下来的会话存档（一个会话一个 txt）放这儿，不进 git。
+SESSIONS_DIR = os.path.join(PROJECT_ROOT, "sessions")
+
+# 表情包库目录。挂在 static 下面，所以网页和后台都直接由 /static/stickers/ 提供。
+STICKERS_DIR = os.path.join(PROJECT_ROOT, "taffy", "web", "static", "stickers")
+
+# 后台「检查更新」用哪个 systemd 服务名重启自己（拉完新代码要重启才生效）。
+SERVICE_NAME = os.environ.get("TAFFY_SERVICE_NAME", "").strip() or "taffy-agent"
 
 # 输入这些词就退出对话
 EXIT_WORDS = ("exit", "quit", "退出", "拜拜")

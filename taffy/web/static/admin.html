@@ -11,6 +11,7 @@
 <body class="admin">
 
 <header class="topbar">
+  <button type="button" id="nav-toggle" class="nav-toggle" aria-label="菜单" hidden>☰</button>
   <img class="avatar" src="/static/avatar.jpg" alt="塔菲">
   <div class="who">
     <div class="name">塔菲后台</div>
@@ -19,103 +20,302 @@
   <button type="button" id="logout" class="new-chat" hidden>退出</button>
 </header>
 
-<main class="admin-main">
+<div class="admin-shell">
 
-  <section id="login-view" class="card" hidden>
-    <h2>先登录喵</h2>
-    <p class="hint">
-      口令每天换一次，只有塔菲的主人知道喵。<br>
-      怎么配、怎么算，见 README 的「后台管理」那一节。
-    </p>
-    <form id="login-form">
-      <label>口令
-        <input type="password" id="password" placeholder="当日口令"
-               autocomplete="current-password">
-      </label>
-      <button type="submit">登录</button>
-    </form>
-  </section>
+  <aside class="sidebar" id="sidebar" hidden>
+    <nav id="nav">
+      <section class="nav-group">
+        <button type="button" class="nav-head">概览<i class="caret" aria-hidden="true"></i></button>
+        <div class="nav-items">
+          <button type="button" class="nav-item" data-view="dashboard">仪表盘</button>
+        </div>
+      </section>
 
-  <section id="panel-view" hidden>
-    <div class="card">
-      <h2>模型</h2>
-      <label>聊天模型（纯文字那几轮）
-        <input id="model" list="model-list" placeholder="deepseek-flash" autocomplete="off">
-      </label>
-      <label>图片模型（消息里带图片的那一轮）
-        <input id="vision-model" list="model-list" placeholder="deepseek-flash" autocomplete="off">
-      </label>
-      <label>检索翻译模型（查知识库时把中文问题翻成英文关键词；留空就跟聊天模型一样）
-        <input id="translate-model" list="model-list" placeholder="留空 = 跟聊天模型一样"
-               autocomplete="off">
-      </label>
-      <datalist id="model-list"></datalist>
-      <button type="button" id="save-models">保存模型</button>
-      <p class="hint" id="history-hint"></p>
-      <div class="chips" id="history-chips"></div>
-    </div>
+      <section class="nav-group">
+        <button type="button" class="nav-head">模型与接口<i class="caret" aria-hidden="true"></i></button>
+        <div class="nav-items">
+          <button type="button" class="nav-item" data-view="models">模型</button>
+          <button type="button" class="nav-item" data-view="keys">接口与 Key</button>
+          <button type="button" class="nav-item" data-view="embed">向量模型</button>
+        </div>
+      </section>
 
-    <div class="card">
-      <h2>接口（聊天 / 图片各一套）</h2>
+      <section class="nav-group">
+        <button type="button" class="nav-head">素材<i class="caret" aria-hidden="true"></i></button>
+        <div class="nav-items">
+          <button type="button" class="nav-item" data-view="stickers">表情包库</button>
+        </div>
+      </section>
 
-      <h3 class="sub">聊天</h3>
-      <label>接口地址
-        <input id="chat-base" autocomplete="off">
-      </label>
-      <label>Key
-        <input type="password" id="chat-key" placeholder="留空不改动；填了就覆盖"
-               autocomplete="new-password">
-      </label>
-      <p class="hint" id="chat-state"></p>
+      <section class="nav-group">
+        <button type="button" class="nav-head">文件<i class="caret" aria-hidden="true"></i></button>
+        <div class="nav-items">
+          <button type="button" class="nav-item" data-view="workspace">工作区文件</button>
+          <button type="button" class="nav-item" data-view="sessions">会话存档</button>
+        </div>
+      </section>
 
-      <h3 class="sub">图片</h3>
-      <label>接口地址
-        <input id="vision-base" autocomplete="off">
-      </label>
-      <label>Key
-        <input type="password" id="vision-key" placeholder="留空不改动；填了就覆盖"
-               autocomplete="new-password">
-      </label>
-      <p class="hint" id="vision-state"></p>
+      <section class="nav-group">
+        <button type="button" class="nav-head">系统<i class="caret" aria-hidden="true"></i></button>
+        <div class="nav-items">
+          <button type="button" class="nav-item" data-view="update">检查更新</button>
+        </div>
+      </section>
+    </nav>
+    <p class="sidebar-tip" id="sidebar-tip"></p>
+  </aside>
 
-      <button type="button" id="save-keys">保存接口设置</button>
+  <main class="admin-main">
+
+    <section id="login-view" class="card" hidden>
+      <h2>先登录喵</h2>
       <p class="hint">
-        两套互相独立：聊天用 GLM、图片用 DeepSeek 也行，各填各的 key 和地址。
-        输入框留空表示「这项不改」，当前生效的值写在上面那行提示里。<br>
-        存下来立刻生效不用重启；key 不回显，也不显示头尾。
+        口令每天换一次，只有塔菲的主人知道喵。<br>
+        怎么配、怎么算，见 README 的「后台管理」那一节。
       </p>
-    </div>
+      <form id="login-form">
+        <label>口令
+          <input type="password" id="password" placeholder="当日口令"
+                 autocomplete="current-password">
+        </label>
+        <button type="submit">登录</button>
+      </form>
+    </section>
 
-    <div class="card">
-      <h2>向量模型（知识库检索用）</h2>
-      <label>模型
-        <input id="embed-model" placeholder="text-embedding-v4" autocomplete="off">
-      </label>
-      <label>接口地址
-        <input id="embed-base" placeholder="https://dashscope.aliyuncs.com/compatible-mode/v1"
-               autocomplete="off">
-      </label>
-      <label>Key
-        <input type="password" id="embed-key" placeholder="留空不改动；填了就覆盖"
-               autocomplete="new-password">
-      </label>
-      <button type="button" id="save-embed">保存向量模型</button>
-      <p class="hint" id="embed-state"></p>
-      <p class="hint">
-        这是给知识库检索用的，跟上面聊天 / 图片那两套没关系。<br>
-        检索是三路一起用的：<b>词匹配</b>管精确词（STM32F103、I2C、IEEE754 这种）；
-        <b>英文检索词</b>会把中文问题翻成英文关键词去查英文教材（用上面那个「检索翻译模型」）；
-        <b>向量</b>管语义——换个说法、近义表达只有它认得出。<br>
-        英译和词匹配那两路不要钱，所以这一路留空也能用，配上只是更准。<br>
-        任何 OpenAI 兼容的 <code>/embeddings</code> 接口都能用。<br>
-        索引维度按 <code>EMBED_DIM</code> 校验（当前 <span id="embed-dim">?</span> 维），
-        对不上会直接报错。<b>改完要重启服务才生效</b>，而且会重新向量化一遍全库。
-      </p>
-      <p class="hint">索引状态：<span id="kb-status">还没开始建喵…</span></p>
-    </div>
-  </section>
+    <div id="panel-view" hidden>
 
-</main>
+      <!-- ---------- 仪表盘 ---------- -->
+      <section class="view" data-view="dashboard" hidden>
+        <div class="card">
+          <h2>服务器状态</h2>
+          <div class="stats">
+            <div class="stat" id="stat-cpu">
+              <div class="stat-label">CPU</div>
+              <div class="stat-value" id="cpu-value">—</div>
+              <div class="stat-note" id="cpu-note"></div>
+            </div>
+            <div class="stat" id="stat-mem">
+              <div class="stat-label">内存</div>
+              <div class="stat-value" id="mem-value">—</div>
+              <div class="stat-note" id="mem-note"></div>
+            </div>
+            <div class="stat" id="stat-disk">
+              <div class="stat-label">磁盘</div>
+              <div class="stat-value" id="disk-value">—</div>
+              <div class="stat-note" id="disk-note"></div>
+            </div>
+            <div class="stat" id="stat-proc">
+              <div class="stat-label">塔菲进程</div>
+              <div class="stat-value" id="proc-value">—</div>
+              <div class="stat-note" id="proc-note"></div>
+            </div>
+          </div>
+          <div class="bar"><span id="mem-bar"></span></div>
+          <p class="hint" id="sysinfo-hint">每 5 秒自己刷一次喵。</p>
+        </div>
+      </section>
+
+      <!-- ---------- 模型 ---------- -->
+      <section class="view" data-view="models" hidden>
+        <div class="card">
+          <h2>模型</h2>
+          <label>聊天模型（纯文字那几轮）
+            <input id="model" list="model-list" placeholder="deepseek-flash" autocomplete="off">
+          </label>
+          <label>图片模型（消息里带图片的那一轮）
+            <input id="vision-model" list="model-list" placeholder="deepseek-flash" autocomplete="off">
+          </label>
+          <label>检索翻译模型（查知识库时把中文问题翻成英文关键词；留空就跟聊天模型一样）
+            <input id="translate-model" list="model-list" placeholder="留空 = 跟聊天模型一样"
+                   autocomplete="off">
+          </label>
+          <datalist id="model-list"></datalist>
+          <button type="button" id="save-models">保存模型</button>
+          <p class="hint" id="history-hint"></p>
+          <div class="chips" id="history-chips"></div>
+        </div>
+      </section>
+
+      <!-- ---------- 接口与 Key ---------- -->
+      <section class="view" data-view="keys" hidden>
+        <div class="card">
+          <h2>接口与 Key</h2>
+
+          <h3 class="sub">聊天</h3>
+          <label>接口地址
+            <input id="chat-base" autocomplete="off">
+          </label>
+          <label>Key
+            <input type="password" id="chat-key" placeholder="留空不改动；填了就覆盖"
+                   autocomplete="new-password">
+          </label>
+          <p class="hint" id="chat-state"></p>
+
+          <h3 class="sub">图片</h3>
+          <label>接口地址
+            <input id="vision-base" autocomplete="off">
+          </label>
+          <label>Key
+            <input type="password" id="vision-key" placeholder="留空不改动；填了就覆盖"
+                   autocomplete="new-password">
+          </label>
+          <p class="hint" id="vision-state"></p>
+
+          <h3 class="sub">检索翻译（可选）</h3>
+          <label>接口地址
+            <input id="translate-base" placeholder="留空 = 跟聊天那套一样" autocomplete="off">
+          </label>
+          <label>Key
+            <input type="password" id="translate-key" placeholder="留空不改动；填了就覆盖"
+                   autocomplete="new-password">
+          </label>
+          <p class="hint" id="translate-state"></p>
+
+          <button type="button" id="save-keys">保存接口设置</button>
+          <p class="hint">
+            聊天和图片两套互相独立：聊天用 GLM、图片用 DeepSeek 也行，各填各的 key 和地址。
+            输入框留空表示「这项不改」，当前生效的值写在上面那行提示里。<br>
+            <b>检索翻译</b>是查知识库时把中文问题翻成英文关键词用的那一路，默认借聊天那套；
+            想让它走另一家或者本机的小模型（省钱、也不怕限流），就把地址和 key 单独填上。<br>
+            存下来立刻生效不用重启；key 不回显，也不显示头尾。
+          </p>
+        </div>
+      </section>
+
+      <!-- ---------- 向量模型 ---------- -->
+      <section class="view" data-view="embed" hidden>
+        <div class="card">
+          <h2>向量模型（知识库检索用，可选）</h2>
+          <label>模型
+            <input id="embed-model" placeholder="text-embedding-v4" autocomplete="off">
+          </label>
+          <label>接口地址
+            <input id="embed-base" placeholder="https://dashscope.aliyuncs.com/compatible-mode/v1"
+                   autocomplete="off">
+          </label>
+          <label>Key
+            <input type="password" id="embed-key" placeholder="留空不改动；填了就覆盖"
+                   autocomplete="new-password">
+          </label>
+          <button type="button" id="save-embed">保存向量模型</button>
+          <p class="hint" id="embed-state"></p>
+          <p class="hint">
+            这是给知识库检索用的，跟上面聊天 / 图片那两套没关系。<br>
+            检索是三路一起用的：<b>原查询词匹配</b>管精确词（STM32F103、I2C、IEEE754 这种）；
+            <b>英文检索词</b>会把中文问题翻成英文关键词去查英文教材（用上面那个「检索翻译模型」）；
+            <b>向量</b>管语义——换个说法、近义表达只有它认得出。<br>
+            前两路不要钱，所以这一路留空也能用，配上只是更准。<br>
+            任何 OpenAI 兼容的 <code>/embeddings</code> 接口都能用。<br>
+            索引维度按 <code>EMBED_DIM</code> 校验（当前 <span id="embed-dim">?</span> 维），
+            对不上会直接报错。<b>改完要重启服务才生效</b>，而且会重新向量化一遍全库。
+          </p>
+          <p class="hint">索引状态：<span id="kb-status">还没开始建喵…</span></p>
+        </div>
+      </section>
+
+      <!-- ---------- 表情包库 ---------- -->
+      <section class="view" data-view="stickers" hidden>
+        <div class="card">
+          <h2>批量导入（zip 压缩包）</h2>
+          <label>选一个 zip（里面的图片按下面的规则命名）
+            <input type="file" id="sticker-zip" accept=".zip,application/zip">
+          </label>
+          <button type="button" id="sticker-import">导入压缩包</button>
+          <p class="hint">
+            <b>压缩包里的文件名规则：心情 + 序号 + 后缀</b>，例如
+            <code>happy1.gif</code>、<code>love_02.png</code>、<code>think-3.webp</code>。
+            去掉后缀后开头那串字母就是心情，后面的数字随便写（只影响显示顺序）。<br>
+            心情只能是这八个：<code>happy</code> <code>think</code> <code>confused</code>
+            <code>proud</code> <code>cry</code> <code>angry</code> <code>sleepy</code>
+            <code>love</code>。<br>
+            支持 png / jpg / gif / webp，<b>gif 会动</b>；单张不超过 8MB，一次最多 500 张。
+            认不出名字的会列在结果里告诉你，不会硬塞进某个心情。<br>
+            压缩包可以带子目录（只看文件名），<code>__MACOSX</code> 和隐藏文件会跳过。
+          </p>
+        </div>
+
+        <div class="card">
+          <h2>单张上传</h2>
+          <label>心情
+            <select id="sticker-mood"></select>
+          </label>
+          <label>图片（文件名随便，会自动改成「心情 + 序号」）
+            <input type="file" id="sticker-file" accept="image/png,image/jpeg,image/gif,image/webp">
+          </label>
+          <button type="button" id="sticker-upload">上传这张</button>
+        </div>
+
+        <div class="card">
+          <h2>库里的表情包（<span id="sticker-total">?</span> 张）</h2>
+          <div id="sticker-library"></div>
+        </div>
+      </section>
+
+      <!-- ---------- 工作区文件 ---------- -->
+      <section class="view" data-view="workspace" hidden>
+        <div class="card">
+          <h2>上传到 workspace</h2>
+          <label>目标路径（相对 workspace，可以带子目录）
+            <input id="ws-path" placeholder="samples/dump.bin" autocomplete="off">
+          </label>
+          <label>文件
+            <input type="file" id="ws-file">
+          </label>
+          <button type="button" id="ws-upload">上传</button>
+          <p class="hint">
+            塔菲的文件工具读写的就是这里（她自己的临时工作区）。传取证样本、数据集、待分析的
+            文件进来都行，单个文件上限 100MB。路径写相对路径，比如 <code>samples/dump.bin</code>。
+          </p>
+        </div>
+
+        <div class="card">
+          <h2>目录：<span id="ws-dir">/</span></h2>
+          <div class="rows" id="ws-list"></div>
+          <p class="hint" id="ws-hint"></p>
+        </div>
+      </section>
+
+      <!-- ---------- 会话存档 ---------- -->
+      <section class="view" data-view="sessions" hidden>
+        <div class="card">
+          <h2>会话存档（<span id="session-count">?</span> 份）</h2>
+          <p class="hint">
+            网页版聊天的「保存上下文」存下来的 txt，放在服务器的
+            <code>sessions/</code> 目录里（不占内存）。点开可以看内容，也可以删。
+          </p>
+          <div class="rows" id="session-list"></div>
+          <pre class="session-body" id="session-body" hidden></pre>
+        </div>
+      </section>
+
+      <!-- ---------- 检查更新 ---------- -->
+      <section class="view" data-view="update" hidden>
+        <div class="card">
+          <h2>检查更新</h2>
+          <label>从哪儿拉
+            <select id="update-remote">
+              <option value="gitee">Gitee（默认，国内服务器连得上）</option>
+              <option value="github">GitHub</option>
+            </select>
+          </label>
+          <div class="row-buttons">
+            <button type="button" id="update-check">检查更新</button>
+            <button type="button" id="update-apply" class="danger" disabled>立即更新</button>
+          </div>
+          <div class="update-result" id="update-result"></div>
+          <p class="hint">
+            更新就是在这个仓库里跑 <code>git pull --ff-only</code>：只在能快进时才动，
+            本地改过的东西一律不覆盖，也绝不 force。拉完会自动重启服务（<code>systemctl</code>），
+            页面会断一下，刷新就好。<br>
+            要能从 Gitee / GitHub 拉，前提是这份部署本身是 <code>git clone</code> 出来的，
+            而且这台机器连得上那个站点。
+          </p>
+        </div>
+      </section>
+
+    </div>
+  </main>
+</div>
 
 <script src="/static/admin.js"></script>
 </body>

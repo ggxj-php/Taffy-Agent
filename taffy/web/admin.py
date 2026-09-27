@@ -23,6 +23,7 @@ from pydantic import BaseModel
 from .. import settings
 from ..config import ADMIN_PASSWORD_PREFIX, EMBED_DIM
 from ..kb import stats as kb_stats
+from . import sysinfo, update
 
 router = APIRouter()
 
@@ -97,6 +98,10 @@ def _state():
         "vision_base_url": settings.vision_base_url(),
         "chat_base_source": settings.base_source(vision=False),
         "vision_base_source": settings.base_source(vision=True),
+        # 检索翻译那一路的连接：留空就跟聊天那套一样，所以键和地址都说清楚它们是哪来的
+        "translate_base_url": settings.translate_base_url(),
+        "translate_base_source": settings.translate_own_base(),
+        "translate_key_source": settings.translate_own_key(),
         # 知识库向量检索那一路（跟聊天 / 图片两套没关系，是检索用的）
         "embed_model": settings.embed_model(),
         "embed_base_url": settings.embed_base_url(),
@@ -104,6 +109,9 @@ def _state():
         "embed_base_source": settings.embed_base_source(),
         "embed_dim": EMBED_DIM,
         "kb": kb_stats(),
+        # 检查更新那一页记住的厂家
+        "update_remote": settings.update_remote(),
+        "update_remotes": list(settings.UPDATE_REMOTES),
     }
 
 
@@ -169,11 +177,14 @@ def save_models(req: ModelsRequest, request: Request):
 
 
 class KeysRequest(BaseModel):
-    # 四个都留空表示「这项不改」——只想换聊天 key 时不用把图片那套重填一遍
+    # 都留空表示「这项不改」——只想换聊天 key 时不用把图片那套重填一遍
     chat_key: str = ""
     vision_key: str = ""
     chat_base_url: str = ""
     vision_base_url: str = ""
+    # 检索翻译那一路：默认跟聊天共用，单独填就是让它走另一家（或者本机小模型）
+    translate_key: str = ""
+    translate_base_url: str = ""
 
 
 def _check_base(name, value):
@@ -188,12 +199,52 @@ def save_keys(req: KeysRequest, request: Request):
     _require(request)
     chat_base = _check_base("聊天", req.chat_base_url)
     vision_base = _check_base("图片", req.vision_base_url)
+    translate_base = _check_base("检索翻译", req.translate_base_url)
     chat_key = req.chat_key.strip()
     vision_key = req.vision_key.strip()
-    if not (chat_key or vision_key or chat_base or vision_base):
+    translate_key = req.translate_key.strip()
+    if not any((chat_key, vision_key, translate_key, chat_base, vision_base, translate_base)):
         raise HTTPException(status_code=400, detail="一个都没填，那就先不动它喵")
-    settings.update_keys(chat_key, vision_key, chat_base, vision_base)
+    settings.update_keys(chat_key, vision_key, chat_base, vision_base,
+                         translate_key_new=translate_key, translate_base=translate_base)
     return _state()
+
+
+# ---------- 仪表盘 ----------
+
+@router.get("/api/admin/sysinfo")
+def sysinfo_state(request: Request):
+    """服务器状态：CPU / 内存 / 磁盘 / 本进程占多少。仪表盘每隔几秒来拉一次。"""
+    _require(request)
+    return sysinfo.snapshot()
+
+
+# ---------- 检查更新 ----------
+
+@router.get("/api/admin/update")
+def update_check(request: Request, remote: str = ""):
+    _require(request)
+    provider = (remote or settings.update_remote()).strip().lower()
+    if provider not in settings.UPDATE_REMOTES:
+        raise HTTPException(status_code=400, detail="只能从 gitee 或者 github 拉喵")
+    settings.set_update_remote(provider)
+    return update.check(provider)
+
+
+class UpdateRequest(BaseModel):
+    # 前端选了哪个厂家就传哪个，同时也会记进配置，下次打开还是它
+    remote: str = ""
+
+
+@router.post("/api/admin/update")
+def update_apply(req: UpdateRequest, request: Request):
+    """拉最新版。成功的话这个进程会在两秒后被 systemd 重启成新代码。"""
+    _require(request)
+    provider = (req.remote or settings.update_remote()).strip().lower()
+    if provider not in settings.UPDATE_REMOTES:
+        raise HTTPException(status_code=400, detail="只能从 gitee 或者 github 拉喵")
+    settings.set_update_remote(provider)
+    return update.apply(provider)
 
 
 class EmbedRequest(BaseModel):

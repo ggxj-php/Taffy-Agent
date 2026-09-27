@@ -1,7 +1,12 @@
 'use strict';
 
-/* 后台管理前端：登录 -> 改模型 / 改聊天和图片各自的接口与 Key。
-   口令是按天算的，所以这里不存任何东西，cookie 交给浏览器自己管。 */
+/* 后台管理前端：登录 -> 左侧导航切面板。
+   面板分五组：概览（仪表盘）、模型与接口、素材（表情包库）、文件（工作区 / 会话存档）、
+   系统（检查更新）。口令是按天算的，所以这里不存任何东西，cookie 交给浏览器自己管。 */
+
+const MOODS = ['happy', 'think', 'confused', 'proud', 'cry', 'angry', 'sleepy', 'love'];
+const IMG_EXTS = ['.png', '.jpg', '.jpeg', '.gif', '.webp'];
+const NAV_KEY = 'taffy_admin_nav_closed';
 
 const statusEl = document.getElementById('status');
 const loginView = document.getElementById('login-view');
@@ -9,6 +14,10 @@ const panelView = document.getElementById('panel-view');
 const logoutEl = document.getElementById('logout');
 const loginForm = document.getElementById('login-form');
 const passwordEl = document.getElementById('password');
+const navToggleEl = document.getElementById('nav-toggle');
+const sidebarEl = document.getElementById('sidebar');
+const sidebarTipEl = document.getElementById('sidebar-tip');
+
 const modelEl = document.getElementById('model');
 const visionEl = document.getElementById('vision-model');
 const translateEl = document.getElementById('translate-model');
@@ -16,13 +25,18 @@ const datalistEl = document.getElementById('model-list');
 const historyHintEl = document.getElementById('history-hint');
 const historyEl = document.getElementById('history-chips');
 const saveModelsEl = document.getElementById('save-models');
+
 const chatBaseEl = document.getElementById('chat-base');
 const chatKeyEl = document.getElementById('chat-key');
 const chatStateEl = document.getElementById('chat-state');
 const visionBaseEl = document.getElementById('vision-base');
 const visionKeyEl = document.getElementById('vision-key');
 const visionStateEl = document.getElementById('vision-state');
+const translateBaseEl = document.getElementById('translate-base');
+const translateKeyEl = document.getElementById('translate-key');
+const translateStateEl = document.getElementById('translate-state');
 const saveKeysEl = document.getElementById('save-keys');
+
 const embedModelEl = document.getElementById('embed-model');
 const embedBaseEl = document.getElementById('embed-base');
 const embedKeyEl = document.getElementById('embed-key');
@@ -31,12 +45,84 @@ const embedDimEl = document.getElementById('embed-dim');
 const kbStatusEl = document.getElementById('kb-status');
 const saveEmbedEl = document.getElementById('save-embed');
 
+const cpuValueEl = document.getElementById('cpu-value');
+const cpuNoteEl = document.getElementById('cpu-note');
+const memValueEl = document.getElementById('mem-value');
+const memNoteEl = document.getElementById('mem-note');
+const memBarEl = document.getElementById('mem-bar');
+const diskValueEl = document.getElementById('disk-value');
+const diskNoteEl = document.getElementById('disk-note');
+const procValueEl = document.getElementById('proc-value');
+const procNoteEl = document.getElementById('proc-note');
+const sysinfoHintEl = document.getElementById('sysinfo-hint');
+
+const stickerZipEl = document.getElementById('sticker-zip');
+const stickerImportEl = document.getElementById('sticker-import');
+const stickerMoodEl = document.getElementById('sticker-mood');
+const stickerFileEl = document.getElementById('sticker-file');
+const stickerUploadEl = document.getElementById('sticker-upload');
+const stickerTotalEl = document.getElementById('sticker-total');
+const stickerLibraryEl = document.getElementById('sticker-library');
+
+const wsPathEl = document.getElementById('ws-path');
+const wsFileEl = document.getElementById('ws-file');
+const wsUploadEl = document.getElementById('ws-upload');
+const wsDirEl = document.getElementById('ws-dir');
+const wsListEl = document.getElementById('ws-list');
+const wsHintEl = document.getElementById('ws-hint');
+
+const sessionCountEl = document.getElementById('session-count');
+const sessionListEl = document.getElementById('session-list');
+const sessionBodyEl = document.getElementById('session-body');
+
+const updateRemoteEl = document.getElementById('update-remote');
+const updateCheckEl = document.getElementById('update-check');
+const updateApplyEl = document.getElementById('update-apply');
+const updateResultEl = document.getElementById('update-result');
+
 let lastState = null;
+let activeView = '';
+let library = { moods: {}, other: [], total: 0 };
+let wsDir = '';
+
+const el = (tag, cls) => {
+  const node = document.createElement(tag);
+  if (cls) node.className = cls;
+  return node;
+};
 
 function flash(text, ok) {
   statusEl.textContent = text;
   statusEl.classList.toggle('bad', ok === false);
 }
+
+function fmtSize(bytes) {
+  if (bytes === null || bytes === undefined) return '—';
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  if (bytes < 1024 * 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+  return `${(bytes / 1024 / 1024 / 1024).toFixed(2)} GB`;
+}
+
+function fmtTime(seconds) {
+  if (!seconds) return '—';
+  const d = new Date(seconds * 1000);
+  const pad = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ` +
+         `${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+function fmtDuration(seconds) {
+  if (!seconds) return '';
+  const days = Math.floor(seconds / 86400);
+  const hours = Math.floor((seconds % 86400) / 3600);
+  const mins = Math.floor((seconds % 3600) / 60);
+  if (days) return `${days} 天 ${hours} 小时`;
+  if (hours) return `${hours} 小时 ${mins} 分`;
+  return `${mins} 分`;
+}
+
+/* ---------------- 请求 ---------------- */
 
 /* 统一发请求：非 2xx 就把后端给的 detail 抛出来 */
 async function api(path, body) {
@@ -46,6 +132,16 @@ async function api(path, body) {
     headers: post ? { 'Content-Type': 'application/json' } : {},
     body: post ? JSON.stringify(body) : undefined,
   });
+  return readResponse(resp);
+}
+
+/* 上传：请求体直接是文件本身（后端流式落盘），文件名放在 query 里 */
+async function apiUpload(path, blob) {
+  const resp = await fetch(path, { method: 'POST', body: blob });
+  return readResponse(resp);
+}
+
+async function readResponse(resp) {
   let data = null;
   try {
     data = await resp.json();
@@ -55,24 +151,104 @@ async function api(path, body) {
   if (!resp.ok) {
     const error = new Error(data && data.detail ? data.detail : `服务返回 ${resp.status}`);
     error.status = resp.status;
+    error.data = data;
     throw error;
   }
   return data;
 }
 
+function guard(err) {
+  if (err && err.status === 401) showLogin(err.message);
+  else flash(err.message, false);
+}
+
+/* ---------------- 侧边导航 ---------------- */
+
+function closedGroups() {
+  try {
+    return JSON.parse(localStorage.getItem(NAV_KEY) || '[]');
+  } catch (err) {
+    return [];
+  }
+}
+
+function saveClosedGroups(list) {
+  try {
+    localStorage.setItem(NAV_KEY, JSON.stringify(list));
+  } catch (err) {
+    /* 存不了就算了，顶多下次打开全展开 */
+  }
+}
+
+function initNav() {
+  const closed = closedGroups();
+  document.querySelectorAll('#nav .nav-group').forEach((group) => {
+    const head = group.querySelector('.nav-head');
+    const key = head.textContent.trim();
+    if (closed.indexOf(key) >= 0) group.classList.add('closed');
+    head.addEventListener('click', () => {
+      group.classList.toggle('closed');
+      const list = [];
+      document.querySelectorAll('#nav .nav-group').forEach((item) => {
+        if (item.classList.contains('closed')) {
+          list.push(item.querySelector('.nav-head').textContent.trim());
+        }
+      });
+      saveClosedGroups(list);
+    });
+  });
+
+  document.querySelectorAll('#nav .nav-item').forEach((item) => {
+    item.addEventListener('click', () => showView(item.dataset.view));
+  });
+
+  navToggleEl.addEventListener('click', () => {
+    sidebarEl.classList.toggle('open');
+  });
+}
+
+function showView(name) {
+  activeView = name;
+  document.querySelectorAll('.view').forEach((view) => {
+    view.hidden = view.dataset.view !== name;
+  });
+  document.querySelectorAll('#nav .nav-item').forEach((item) => {
+    item.classList.toggle('on', item.dataset.view === name);
+  });
+  if (location.hash.slice(2) !== name) location.hash = `#/${name}`;
+  sidebarEl.classList.remove('open');
+  const hook = VIEW_HOOKS[name];
+  if (hook) hook();
+}
+
+const VIEW_HOOKS = {
+  dashboard: refreshSysinfo,
+  stickers: loadStickers,
+  workspace: () => loadWorkspace(wsDir),
+  sessions: loadSessions,
+  update: initUpdate,
+};
+
 function showLogin(message) {
   loginView.hidden = false;
   panelView.hidden = true;
+  sidebarEl.hidden = true;
+  navToggleEl.hidden = true;
   logoutEl.hidden = true;
   flash(message || '先输口令喵', false);
   passwordEl.focus();
 }
 
+/* ---------------- 配置：模型 / 接口 / 向量 ---------------- */
+
 function render(state) {
   lastState = state;
   loginView.hidden = true;
   panelView.hidden = false;
+  sidebarEl.hidden = false;
+  navToggleEl.hidden = false;
   logoutEl.hidden = false;
+  sidebarTipEl.textContent = `口令每天换一次 · 聊天用 ${state.model} 喵`;
 
   modelEl.value = state.model;
   visionEl.value = state.vision_model;
@@ -81,12 +257,18 @@ function render(state) {
   // 接口地址不是秘密，直接填进去给主人看着改；提交时没动过就不写盘
   chatBaseEl.value = state.chat_base_url;
   visionBaseEl.value = state.vision_base_url;
+  translateBaseEl.value = state.translate_base_url;
   chatStateEl.textContent = state.chat_key_source === 'admin'
     ? '当前 key 是后台设过的。'
     : '当前 key 用的是 .env 里的。';
   visionStateEl.textContent = state.vision_key_source === 'admin'
     ? '当前 key 是后台单独给图片这套设过的。'
     : '当前 key 用的是 .env 里给图片这套的默认值，跟聊天那套无关。';
+  translateStateEl.textContent = state.translate_base_source === 'chat' &&
+    state.translate_key_source === 'chat'
+    ? '现在跟聊天那套完全共用（地址和 key 都是）。'
+    : `地址来自 ${state.translate_base_source === 'admin' ? '后台' : 'env'}，` +
+      `key 来自 ${state.translate_key_source === 'admin' ? '后台' : 'env'}。`;
 
   // 向量模型：模型名和地址直接填出来给主人看着改，key 只说来源
   embedModelEl.value = state.embed_model || '';
@@ -100,6 +282,7 @@ function render(state) {
     embedStateEl.textContent = '当前 key 用的是 .env 里的。';
   }
   renderKb(state.kb);
+  updateRemoteEl.value = state.update_remote || 'gitee';
 
   const history = state.model_history || [];
   datalistEl.innerHTML = '';
@@ -121,9 +304,12 @@ function render(state) {
   historyHintEl.textContent = history.length
     ? '用过的模型（点一下填进聊天模型）：'
     : '还没用过别的模型喵。';
+  historyEl.hidden = !history.length;
 
-  if (!history.length) historyEl.hidden = true;
-  else historyEl.hidden = false;
+  if (!activeView) {
+    const wanted = location.hash.slice(2);
+    showView(VIEW_HOOKS[wanted] ? wanted : 'dashboard');
+  }
 }
 
 async function load(message) {
@@ -146,27 +332,472 @@ function renderKb(kb) {
   parts.push(`收进来 ${kb.chunks} 块`);
   parts.push(kb.vectors
     ? `其中 ${kb.vectors} 块带向量，三路检索都在用`
-    : '没有向量（词匹配 + 英文检索词照常用）');
+    : '没有向量（原查询 + 英文检索词照常用）');
   let text = `${parts.join('，')}。`;
   if (kb.error) text += ` 最近一次向量调用出过错：${kb.error}`;
   kbStatusEl.textContent = text;
 }
 
-/* 建索引可能要好几分钟，隔几秒刷一下那行状态（只改文字，不动输入框） */
-setInterval(async () => {
+async function refreshKbStatus() {
   if (panelView.hidden) return;
   try {
     renderKb((await api('/api/admin/state')).kb);
   } catch (err) {
     /* 登录过期之类的问题交给下一次 load() 处理，这里不打扰 */
   }
-}, 5000);
+}
 
-/* 输入框里的值和当前生效的一样，就当没改过，不写盘 */
+/* ---------------- 仪表盘 ---------------- */
+
+function paintBar(percent) {
+  memBarEl.style.width = `${Math.max(0, Math.min(100, percent || 0))}%`;
+  memBarEl.classList.toggle('warn', percent >= 85);
+}
+
+async function refreshSysinfo() {
+  if (panelView.hidden) return;
+  let info = null;
+  try {
+    info = await api('/api/admin/sysinfo');
+  } catch (err) {
+    if (err.status === 401) showLogin(err.message);
+    else sysinfoHintEl.textContent = `读不到服务器状态：${err.message}`;
+    return;
+  }
+
+  const cpu = info.cpu || {};
+  cpuValueEl.textContent = cpu.percent === null || cpu.percent === undefined
+    ? '—' : `${cpu.percent}%`;
+  cpuNoteEl.textContent = cpu.percent === null
+    ? '这台系统读不到（/proc 只在 Linux 上有）'
+    : `${cpu.cores} 核` + (cpu.load ? ` · 负载 ${cpu.load.join(' / ')}` : '');
+
+  const mem = info.mem;
+  if (mem) {
+    memValueEl.textContent = `${mem.percent}%`;
+    memNoteEl.textContent = `已用 ${fmtSize(mem.used_mb * 1048576)} / 共 ` +
+      `${fmtSize(mem.total_mb * 1048576)} · 还能用 ${fmtSize(mem.available_mb * 1048576)}` +
+      (mem.swap_total_mb ? ` · swap ${fmtSize(mem.swap_used_mb * 1048576)}` : ' · 没开 swap');
+    paintBar(mem.percent);
+  } else {
+    memValueEl.textContent = '—';
+    memNoteEl.textContent = '这台系统读不到';
+    paintBar(0);
+  }
+
+  const disk = info.disk;
+  if (disk) {
+    diskValueEl.textContent = `${disk.percent}%`;
+    diskNoteEl.textContent = `已用 ${fmtSize(disk.used_mb * 1048576)} / 共 ` +
+      `${fmtSize(disk.total_mb * 1048576)} · 剩 ${fmtSize(disk.free_mb * 1048576)}`;
+  } else {
+    diskValueEl.textContent = '—';
+    diskNoteEl.textContent = '读不到';
+  }
+
+  const proc = info.process || {};
+  procValueEl.textContent = proc.rss_mb ? fmtSize(proc.rss_mb * 1048576) : '—';
+  procNoteEl.textContent = proc.uptime_s
+    ? `开机以来 ${fmtDuration(proc.uptime_s)}`
+    : '这是本进程占的内存';
+
+  sysinfoHintEl.textContent = '每 5 秒自己刷一次喵。' +
+    (mem && mem.percent >= 85 ? ' 内存快满了，注意别让它开太多会话喵！' : '');
+}
+
+/* ---------------- 表情包库 ---------------- */
+
+function nextStickerName(mood, ext) {
+  let max = 0;
+  (library.moods[mood] || []).forEach((item) => {
+    const stem = item.name.replace(/\.[^.]+$/, '');
+    const digits = (stem.match(/\d+/g) || []).join('');
+    const value = digits ? parseInt(digits, 10) : 0;
+    if (value > max) max = value;
+  });
+  return `${mood}${max + 1}${ext}`;
+}
+
+function stickerCard(item, onDelete) {
+  const card = el('div', 'sticker-card');
+  const img = el('img', 'sticker-thumb');
+  img.src = `/static/stickers/${encodeURIComponent(item.name)}`;
+  img.alt = item.name;
+  img.loading = 'lazy';
+  const name = el('div', 'sticker-name');
+  name.textContent = item.name;
+  const size = el('div', 'sticker-size');
+  size.textContent = fmtSize(item.size);
+  const del = el('button', 'sticker-del');
+  del.type = 'button';
+  del.textContent = '删';
+  del.addEventListener('click', () => onDelete(item.name));
+  card.append(img, name, size, del);
+  return card;
+}
+
+function renderStickers(data) {
+  library = data;
+  stickerTotalEl.textContent = data.total;
+  stickerLibraryEl.innerHTML = '';
+  MOODS.forEach((mood) => {
+    const items = data.moods[mood] || [];
+    const block = el('div', 'mood-block');
+    const head = el('div', 'mood-head');
+    head.textContent = `${mood}（${items.length}）`;
+    block.appendChild(head);
+    const grid = el('div', 'sticker-grid');
+    if (!items.length) {
+      const empty = el('div', 'mood-empty');
+      empty.textContent = '还没有喵';
+      grid.appendChild(empty);
+    }
+    items.forEach((item) => grid.appendChild(stickerCard(item, deleteSticker)));
+    block.appendChild(grid);
+    stickerLibraryEl.appendChild(block);
+  });
+
+  if (data.other && data.other.length) {
+    const block = el('div', 'mood-block');
+    const head = el('div', 'mood-head');
+    head.textContent = `没归类的（${data.other.length}）—— 文件名开头不是那八个心情，塔菲用不上，建议改个名`;
+    block.appendChild(head);
+    const grid = el('div', 'sticker-grid');
+    data.other.forEach((item) => grid.appendChild(stickerCard(item, deleteSticker)));
+    block.appendChild(grid);
+    stickerLibraryEl.appendChild(block);
+  }
+}
+
+async function loadStickers() {
+  try {
+    renderStickers(await api('/api/admin/stickers'));
+  } catch (err) {
+    guard(err);
+  }
+}
+
+async function deleteSticker(name) {
+  try {
+    const data = await api('/api/admin/stickers/delete', { name });
+    renderStickers(data.library);
+    flash(`删掉啦喵：${data.removed}`, true);
+  } catch (err) {
+    guard(err);
+  }
+}
+
+async function uploadSticker() {
+  const file = stickerFileEl.files && stickerFileEl.files[0];
+  if (!file) {
+    flash('先挑一张图片喵', false);
+    return;
+  }
+  const ext = (file.name.match(/\.[^.]+$/) || [''])[0].toLowerCase();
+  if (IMG_EXTS.indexOf(ext) < 0) {
+    flash(`只收 ${IMG_EXTS.join(' / ')} 喵`, false);
+    return;
+  }
+  const name = nextStickerName(stickerMoodEl.value, ext);
+  stickerUploadEl.disabled = true;
+  try {
+    const data = await apiUpload(`/api/admin/stickers/upload?name=${encodeURIComponent(name)}`, file);
+    renderStickers(data.library);
+    stickerFileEl.value = '';
+    flash(`收下啦喵：${data.name}（${fmtSize(data.size)}）`, true);
+  } catch (err) {
+    guard(err);
+  } finally {
+    stickerUploadEl.disabled = false;
+  }
+}
+
+async function importZip() {
+  const file = stickerZipEl.files && stickerZipEl.files[0];
+  if (!file) {
+    flash('先挑一个 zip 喵', false);
+    return;
+  }
+  if (!/\.zip$/i.test(file.name)) {
+    flash('要 .zip 压缩包喵', false);
+    return;
+  }
+  stickerImportEl.disabled = true;
+  flash('正在解包喵…');
+  try {
+    const data = await apiUpload('/api/admin/stickers/import', file);
+    renderStickers(data.library);
+    stickerZipEl.value = '';
+    const skipped = data.skipped || [];
+    let text = `导进来 ${data.added.length} 张喵`;
+    if (skipped.length) text += `，跳过 ${skipped.length} 个`;
+    flash(text, true);
+    if (skipped.length) {
+      alert('这几张没收进来：\n' + skipped.slice(0, 20)
+        .map(([name, why]) => `${name} —— ${why}`).join('\n') +
+        (skipped.length > 20 ? `\n……还有 ${skipped.length - 20} 个` : ''));
+    }
+  } catch (err) {
+    guard(err);
+  } finally {
+    stickerImportEl.disabled = false;
+  }
+}
+
+/* ---------------- 工作区文件 ---------------- */
+
+function wsRow(item) {
+  const row = el('div', 'row');
+  const icon = el('span', 'row-icon');
+  icon.textContent = item.dir ? '📁' : '📄';
+  const name = el('span', 'row-name');
+  name.textContent = item.name;
+  const meta = el('span', 'row-meta');
+  meta.textContent = `${item.dir ? '目录' : fmtSize(item.size)} · ${fmtTime(item.mtime)}`;
+  row.append(icon, name, meta);
+
+  if (item.dir) {
+    row.classList.add('clickable');
+    row.addEventListener('click', () => loadWorkspace(item.path));
+  }
+  const del = el('button', 'row-btn');
+  del.type = 'button';
+  del.textContent = '删除';
+  del.addEventListener('click', async (event) => {
+    event.stopPropagation();
+    const what = item.dir ? `目录 ${item.path}（里面的东西一起删）` : `文件 ${item.path}`;
+    if (!confirm(`确定删掉${what} 喵？`)) return;
+    try {
+      const data = await api('/api/admin/workspace/delete',
+                             { path: item.path, recursive: item.dir });
+      flash(data.message, true);
+      loadWorkspace(wsDir);
+    } catch (err) {
+      guard(err);
+    }
+  });
+  row.appendChild(del);
+  return row;
+}
+
+async function loadWorkspace(dir) {
+  try {
+    const data = await api(`/api/admin/workspace?path=${encodeURIComponent(dir || '')}`);
+    wsDir = data.dir === '.' ? '' : data.dir;
+    wsDirEl.textContent = '/' + wsDir;
+    wsListEl.innerHTML = '';
+
+    if (wsDir) {
+      const up = el('div', 'row clickable');
+      const icon = el('span', 'row-icon');
+      icon.textContent = '↩';
+      const name = el('span', 'row-name');
+      name.textContent = '返回上一级';
+      up.append(icon, name);
+      up.addEventListener('click', () => {
+        const parts = wsDir.split('/');
+        parts.pop();
+        loadWorkspace(parts.join('/'));
+      });
+      wsListEl.appendChild(up);
+    }
+
+    if (!data.entries.length) {
+      const empty = el('div', 'row empty');
+      empty.textContent = '空目录喵';
+      wsListEl.appendChild(empty);
+    }
+    data.entries.forEach((item) => wsListEl.appendChild(wsRow(item)));
+    wsHintEl.textContent = data.truncated
+      ? '文件太多，只列了前面一部分喵。'
+      : '点目录名进去，点「删除」删掉。塔菲也能读写这里。';
+  } catch (err) {
+    guard(err);
+  }
+}
+
+async function uploadWorkspace() {
+  const file = wsFileEl.files && wsFileEl.files[0];
+  if (!file) {
+    flash('先挑一个文件喵', false);
+    return;
+  }
+  let rel = wsPathEl.value.trim().replace(/\\/g, '/').replace(/^\/+/, '');
+  if (!rel) rel = file.name;
+  if (rel.endsWith('/')) rel += file.name;
+  wsUploadEl.disabled = true;
+  flash('正在上传喵…');
+  try {
+    const data = await apiUpload(`/api/admin/workspace/upload?path=${encodeURIComponent(rel)}`, file);
+    flash(`传好了喵：${data.path}（${fmtSize(data.size)}）`, true);
+    wsFileEl.value = '';
+    wsPathEl.value = '';
+    const parts = data.path.split('/');
+    parts.pop();
+    loadWorkspace(parts.join('/'));
+  } catch (err) {
+    guard(err);
+  } finally {
+    wsUploadEl.disabled = false;
+  }
+}
+
+/* ---------------- 会话存档 ---------------- */
+
+async function loadSessions() {
+  try {
+    const data = await api('/api/admin/sessions');
+    const items = data.items || [];
+    sessionCountEl.textContent = items.length;
+    sessionListEl.innerHTML = '';
+    if (!items.length) {
+      const empty = el('div', 'row empty');
+      empty.textContent = '还没有存档喵。聊天页右上角「保存上下文」可以存一份。';
+      sessionListEl.appendChild(empty);
+      return;
+    }
+    items.forEach((item) => {
+      const row = el('div', 'row');
+      const name = el('span', 'row-name');
+      name.textContent = item.uuid;
+      const meta = el('span', 'row-meta');
+      meta.textContent = `${fmtSize(item.size)} · ${fmtTime(item.mtime)} · ${item.preview}`;
+      row.append(name, meta);
+
+      const view = el('button', 'row-btn');
+      view.type = 'button';
+      view.textContent = '查看';
+      view.addEventListener('click', () => openSession(item.uuid));
+      row.appendChild(view);
+
+      const del = el('button', 'row-btn danger');
+      del.type = 'button';
+      del.textContent = '删除';
+      del.addEventListener('click', async () => {
+        if (!confirm(`确定删掉存档 ${item.uuid} 喵？`)) return;
+        try {
+          await api('/api/admin/sessions/delete', { uuid: item.uuid });
+          sessionBodyEl.hidden = true;
+          flash(`删掉啦喵：${item.uuid}`, true);
+          loadSessions();
+        } catch (err) {
+          guard(err);
+        }
+      });
+      row.appendChild(del);
+      sessionListEl.appendChild(row);
+    });
+  } catch (err) {
+    guard(err);
+  }
+}
+
+async function openSession(uuid) {
+  try {
+    const data = await api(`/api/admin/sessions/${encodeURIComponent(uuid)}`);
+    sessionBodyEl.textContent = data.text + (data.truncated ? '\n\n……（太长，后面截掉了）' : '');
+    sessionBodyEl.hidden = false;
+    sessionBodyEl.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  } catch (err) {
+    guard(err);
+  }
+}
+
+/* ---------------- 检查更新 ---------------- */
+
+let updateInfo = null;
+
+function initUpdate() {
+  if (lastState && lastState.update_remote) updateRemoteEl.value = lastState.update_remote;
+}
+
+function renderUpdate(data, applied) {
+  updateInfo = data;
+  updateApplyEl.disabled = data.error ? true : Boolean(data.up_to_date);
+
+  const lines = [];
+  if (data.error) {
+    lines.push(`<div class="bad-line">出错了：${escapeHtml(data.error)}</div>`);
+  } else {
+    lines.push(`<div>远端：<code>${escapeHtml(data.remote)}</code> ` +
+               `<code>${escapeHtml(data.url)}</code> · 分支 <code>${escapeHtml(data.branch)}</code></div>`);
+    lines.push(`<div>本地 <code>${escapeHtml(data.local)}</code> → 远端 ` +
+               `<code>${escapeHtml(data.remote_head)}</code></div>`);
+    lines.push(data.up_to_date
+      ? '<div class="ok-line">已经是最新的了喵。</div>'
+      : `<div class="ok-line">落后 ${data.behind} 个提交，可以更新：</div>`);
+    if (data.commits && data.commits.length) {
+      lines.push('<pre class="update-log">' +
+                 escapeHtml(data.commits.join('\n')) + '</pre>');
+    }
+  }
+  if (applied) {
+    lines.push(`<div class="${applied.ok ? 'ok-line' : 'bad-line'}">${escapeHtml(applied.message)}</div>`);
+  }
+  if (!data.can_auto_restart) {
+    lines.push('<div class="dim">没检测到 systemd 在管 <code>' + escapeHtml(data.service) +
+               '</code>，更新完需要自己重启才生效。</div>');
+  }
+  updateResultEl.innerHTML = lines.join('');
+}
+
+function escapeHtml(text) {
+  return String(text).replace(/[&<>"']/g, (ch) => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+  })[ch]);
+}
+
+async function checkUpdate() {
+  updateCheckEl.disabled = true;
+  updateResultEl.textContent = '正在问远端喵…';
+  try {
+    renderUpdate(await api(`/api/admin/update?remote=${encodeURIComponent(updateRemoteEl.value)}`));
+  } catch (err) {
+    if (err.status === 401) showLogin(err.message);
+    else updateResultEl.innerHTML = `<div class="bad-line">${escapeHtml(err.message)}</div>`;
+  } finally {
+    updateCheckEl.disabled = false;
+  }
+}
+
+async function applyUpdate() {
+  if (!confirm('会用 git pull 拉最新版，然后重启服务（聊天页会断一下）。\n确定现在更新喵？')) return;
+  updateApplyEl.disabled = true;
+  updateResultEl.textContent = '正在拉取喵…';
+  try {
+    const data = await api('/api/admin/update', { remote: updateRemoteEl.value });
+    if (updateInfo) renderUpdate(updateInfo, data);
+    else {
+      updateResultEl.innerHTML = `<div class="${data.ok ? 'ok-line' : 'bad-line'}">` +
+        `${escapeHtml(data.message)}</div>`;
+    }
+    if (data.restart) {
+      setTimeout(() => {
+        location.reload();
+      }, 6000);
+    }
+  } catch (err) {
+    if (err.status === 401) showLogin(err.message);
+    else updateResultEl.innerHTML = `<div class="bad-line">${escapeHtml(err.message)}</div>`;
+  }
+}
+
+/* ---------------- 输入框里的值和当前生效的一样，就当没改过，不写盘 ---------------- */
+
 function changed(el, current) {
   const value = el.value.trim();
   return value === current ? '' : value;
 }
+
+/* ---------------- 事件绑定 ---------------- */
+
+initNav();
+MOODS.forEach((mood) => {
+  const option = document.createElement('option');
+  option.value = mood;
+  option.textContent = mood;
+  stickerMoodEl.appendChild(option);
+});
 
 loginForm.addEventListener('submit', async (event) => {
   event.preventDefault();
@@ -205,8 +836,7 @@ saveModelsEl.addEventListener('click', async () => {
     }));
     flash('模型存好了喵，下一条消息就生效', true);
   } catch (err) {
-    if (err.status === 401) showLogin(err.message);
-    else flash(err.message, false);
+    guard(err);
   } finally {
     saveModelsEl.disabled = false;
   }
@@ -216,10 +846,12 @@ saveKeysEl.addEventListener('click', async () => {
   const body = {
     chat_key: chatKeyEl.value.trim(),
     vision_key: visionKeyEl.value.trim(),
+    translate_key: translateKeyEl.value.trim(),
     chat_base_url: changed(chatBaseEl, lastState.chat_base_url),
     vision_base_url: changed(visionBaseEl, lastState.vision_base_url),
+    translate_base_url: changed(translateBaseEl, lastState.translate_base_url),
   };
-  if (!body.chat_key && !body.vision_key && !body.chat_base_url && !body.vision_base_url) {
+  if (!Object.values(body).some((value) => value)) {
     flash('什么都没改喵', false);
     return;
   }
@@ -228,10 +860,10 @@ saveKeysEl.addEventListener('click', async () => {
     render(await api('/api/admin/keys', body));
     chatKeyEl.value = '';
     visionKeyEl.value = '';
+    translateKeyEl.value = '';
     flash('接口设置存好了喵，下一条消息就生效', true);
   } catch (err) {
-    if (err.status === 401) showLogin(err.message);
-    else flash(err.message, false);
+    guard(err);
   } finally {
     saveKeysEl.disabled = false;
   }
@@ -253,11 +885,28 @@ saveEmbedEl.addEventListener('click', async () => {
     embedKeyEl.value = '';
     flash('向量模型存好了喵，重启服务后生效', true);
   } catch (err) {
-    if (err.status === 401) showLogin(err.message);
-    else flash(err.message, false);
+    guard(err);
   } finally {
     saveEmbedEl.disabled = false;
   }
 });
+
+stickerUploadEl.addEventListener('click', uploadSticker);
+stickerImportEl.addEventListener('click', importZip);
+wsUploadEl.addEventListener('click', uploadWorkspace);
+updateCheckEl.addEventListener('click', checkUpdate);
+updateApplyEl.addEventListener('click', applyUpdate);
+
+window.addEventListener('hashchange', () => {
+  const name = location.hash.slice(2);
+  if (VIEW_HOOKS[name] && name !== activeView) showView(name);
+});
+
+/* 每 5 秒刷一次「当前这个面板」里会变的东西（仪表盘 / 索引进度） */
+const POLLED = { dashboard: refreshSysinfo, embed: refreshKbStatus };
+setInterval(() => {
+  const fn = POLLED[activeView];
+  if (fn) fn();
+}, 5000);
 
 load();
