@@ -62,6 +62,12 @@ const saveUuidEl = document.getElementById('save-uuid');
 const saveMsgEl = document.getElementById('save-msg');
 const saveOkEl = document.getElementById('save-ok');
 const saveCancelEl = document.getElementById('save-cancel');
+const loadSessionEl = document.getElementById('load-session');
+const loadModalEl = document.getElementById('load-modal');
+const loadUuidEl = document.getElementById('load-uuid');
+const loadMsgEl = document.getElementById('load-msg');
+const loadOkEl = document.getElementById('load-ok');
+const loadCancelEl = document.getElementById('load-cancel');
 const ctxBarEl = document.getElementById('ctx-bar');
 const ctxFillEl = document.getElementById('ctx-fill');
 const ctxTextEl = document.getElementById('ctx-text');
@@ -785,6 +791,115 @@ saveUuidEl.addEventListener('keydown', (event) => {
   }
 });
 
+/* ---------------- 导入上下文 ----------------
+   把存过的存档接回这个会话（见 taffy/web/app.py 的 /api/session/import）。
+   接回来的是完整历史，所以「上下文 xx%」跟着一起回来——历史长、百分比却是 0
+   的话，自动压缩就一直不触发，下一轮直接撞超长，这正是当初要带回来的原因。 */
+
+const HISTORY_RENDER_MAX = 200;   // 太长的存档只画最近这么多条，别把页面卡住
+
+function loadMsg(text, ok) {
+  loadMsgEl.textContent = text;
+  loadMsgEl.classList.toggle('ok', ok === true);
+  loadMsgEl.classList.toggle('bad', ok === false);
+}
+
+function openLoadModal() {
+  if (busy) {
+    statusEl.textContent = '等塔菲说完这句再导喵';
+    return;
+  }
+  loadUuidEl.value = '';
+  loadMsg('');
+  loadModalEl.hidden = false;
+  loadUuidEl.focus();
+}
+
+function closeLoadModal() {
+  loadModalEl.hidden = true;
+  inputEl.focus();
+}
+
+/* 把历史摆回聊天区：工具调用那些不画（刷屏），只摆用户说的和塔菲的正文 */
+function renderHistory(items) {
+  items.forEach((item) => {
+    if (item.role === 'user') {
+      addUser(item.text, null);
+      return;
+    }
+    const turn = addAgent();
+    contentChunk(turn, item.text);
+    if (turn.content) scheduleRender(turn.content);
+  });
+}
+
+async function doImport() {
+  const uuid = loadUuidEl.value.trim();
+  if (!uuid) {
+    loadMsg('得填个 uuid 喵', false);
+    return;
+  }
+  // 跟后端同一套规矩，先在前端拦一道
+  if (uuid.indexOf('..') >= 0 || !/^[A-Za-z0-9][A-Za-z0-9._-]{1,63}$/.test(uuid)) {
+    loadMsg('只能用字母、数字和 . _ -（3~64 位，开头得是字母或数字）喵', false);
+    return;
+  }
+  loadOkEl.disabled = true;
+  loadMsg('正在接回来喵…');
+  try {
+    const id = await ensureSession();
+    const resp = await fetch('/api/session/import', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ session_id: id, uuid }),
+    });
+    let data = null;
+    try {
+      data = await resp.json();
+    } catch (err) {
+      data = null;
+    }
+    if (!resp.ok) {
+      loadMsg((data && data.detail) || `导不进来，服务返回 ${resp.status}`, false);
+      return;
+    }
+    const items = data.history || [];
+    const shown = items.slice(-HISTORY_RENDER_MAX);
+    messagesEl.innerHTML = '';
+    renderHistory(shown);
+    const turn = addAgent();
+    noticeBubble(turn,
+      `接上存档「${data.uuid}」了喵：一共 ${data.messages} 条记录` +
+      (shown.length < items.length ? `（这里画最近 ${shown.length} 条）` : '') +
+      `，上下文跟着回到 ${Math.round(((data.context && data.context.percent) || 0) * 10) / 10}%，` +
+      '接着聊就好～');
+    if (data.context) paintContext(data.context);
+    sentCount += 1;          // 有东西可以接着存了
+    scrollToBottom();
+    loadMsg('接回来啦喵', true);
+    setTimeout(closeLoadModal, 1000);
+  } catch (err) {
+    loadMsg(`导不进来喵：${err && err.message ? err.message : err}`, false);
+  } finally {
+    loadOkEl.disabled = false;
+  }
+}
+
+loadSessionEl.addEventListener('click', openLoadModal);
+loadCancelEl.addEventListener('click', closeLoadModal);
+loadOkEl.addEventListener('click', doImport);
+loadModalEl.addEventListener('click', (event) => {
+  if (event.target === loadModalEl) closeLoadModal();   // 点遮罩关掉
+});
+loadUuidEl.addEventListener('keydown', (event) => {
+  if (event.key === 'Enter') {
+    event.preventDefault();
+    doImport();
+  } else if (event.key === 'Escape') {
+    closeLoadModal();
+  }
+});
+
 /* 回车不发送，老老实实在输入框里换行；要发就点「发送」按钮。
    手机端也一样，软键盘的回车键只负责换行，不会手滑把半句话发出去。 */
 formEl.addEventListener('submit', (e) => {
@@ -821,7 +936,8 @@ function welcome() {
     '雏草姬来啦喵～我是永雏塔菲，有什么想聊的直接说就好喵。\n\n' +
     '算法题、代码、知识库里的资料都可以问我；嵌入式、单片机（STM32 那种）、物联网、' +
     '计算机组成原理、数字取证这些塔菲也懂喵。左下角可以发图片给塔菲看（看完就删，不会留着）；' +
-    '想把这段聊天存下来就点右上角「保存上下文」，塔菲会存成一份 txt（要你自己起个名字）；' +
+    '想把这段聊天存下来就点右上角「保存上下文」（要你自己起个名字）；下次点「导入上下文」' +
+    '填那个名字，塔菲就能把这段对话连上下文用量一起接回来；' +
     '想换个话题就点「新会话」，塔菲会把之前的事忘干净从头开始喵～\n\n' +
     '输入框上面那条是这段对话占了多少「上下文」，快满的时候塔菲会自己把前面聊过的' +
     '压成摘要，不会聊着聊着就卡住喵。'

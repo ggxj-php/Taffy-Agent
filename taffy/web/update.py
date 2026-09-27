@@ -12,7 +12,7 @@ import os
 import subprocess
 import threading
 
-from ..config import PROJECT_ROOT, SERVICE_NAME
+from ..config import GIT_MIRRORS, PROJECT_ROOT, SERVICE_NAME
 
 TIMEOUT = 120
 # 要密码就直接失败，别把后台请求挂在那儿等输入（服务器上的仓库是公开的，用不着密码）
@@ -54,12 +54,19 @@ def remotes():
 
 
 def pick_remote(provider):
-    """按厂家挑远端（地址里带 gitee.com / github.com 的那个）。没有就返回空。"""
+    """按厂家挑远端：先找地址里带 gitee.com / github.com 的那个。
+
+    仓库里没有对应厂家的 remote 时，退回 config.GIT_MIRRORS 里的镜像地址——
+    服务器上常常只 clone 了其中一个，切到另一边就会「没有远端地址」拉不了。
+    返回 (名字, 地址)：名字为空表示「仓库里没这个 remote，直接用地址拉」。
+    """
+    host = "gitee.com" if provider == "gitee" else "github.com"
     for name, url in remotes().items():
-        if provider == "gitee" and "gitee.com" in url:
+        if host in url:
             return name, url
-        if provider == "github" and "github.com" in url:
-            return name, url
+    mirror = GIT_MIRRORS.get(provider, "")
+    if mirror and host in mirror:
+        return "", mirror
     return "", ""
 
 
@@ -99,10 +106,11 @@ def check(provider):
         "service": SERVICE_NAME,
     }
     name, url = pick_remote(provider)
-    info["remote"], info["url"] = name, url
-    if not name:
-        have = "、".join(remotes().keys()) or "一个都没有"
-        info["error"] = f"这个仓库里没有 {provider} 的远端地址（现有远端：{have}），换一个厂家试试"
+    # 镜像兜底时没有 remote 名字，前端那行「远端：xxx」就显示出厂家，别空着
+    info["remote"], info["url"] = (name or f"{provider}（镜像）"), url
+    if not url:
+        info["error"] = (f"这个仓库里没有 {provider} 的远端地址，config.py 里也没配它那份镜像地址。"
+                         "换个厂家试试，或者把 GIT_MIRRORS 里的地址改成你自己的仓库")
         return info
     if not info["branch"] or info["branch"] == "HEAD":
         info["error"] = "当前不在任何分支上（detached HEAD），没法比较"
@@ -111,12 +119,17 @@ def check(provider):
     ok, out = _git("rev-parse", "HEAD")
     info["local"] = out[:8] if ok else ""
 
-    ok, out = _git("fetch", name, "--prune", "--quiet")
+    if name:
+        ok, out = _git("fetch", name, "--prune", "--quiet")
+        ref = f"{name}/{info['branch']}"
+    else:
+        # 仓库里没这个 remote：直接按镜像地址拉，只更新 FETCH_HEAD（不改本地 remote 配置）
+        ok, out = _git("fetch", url, info["branch"], "--quiet")
+        ref = "FETCH_HEAD"
     if not ok:
         info["error"] = f"拉取远端仓库信息失败：{out[-300:]}"
         return info
 
-    ref = f"{name}/{info['branch']}"
     ok, out = _git("rev-parse", ref)
     if not ok:
         info["error"] = f"远端没有 {ref} 这个分支"
@@ -160,20 +173,32 @@ def restart_now():
 def apply(provider):
     """拉最新版。成功的话顺手安排一次重启。"""
     name, url = pick_remote(provider)
-    if not name:
-        return {"ok": False, "message": f"这个仓库里没有 {provider} 的远端地址，拉不了", "restart": False}
+    if not url:
+        return {"ok": False,
+                "message": f"这个仓库里没有 {provider} 的远端地址，config.py 里也没配它那份镜像地址，拉不了",
+                "restart": False}
     branch = _branch()
     if not branch or branch == "HEAD":
         return {"ok": False, "message": "当前不在任何分支上，拉不了", "restart": False}
 
     before, _ = _git("rev-parse", "--short", "HEAD")
-    ok, out = _git("pull", "--ff-only", name, branch)
+    # 有对应 remote 就按名字拉；没有就按镜像地址拉（效果一样，只走 --ff-only 快进）
+    ok, out = _git("pull", "--ff-only", name or url, branch)
     if not ok:
+        # 本地改过的东西（比如手动删过几张自带的表情包、或者 knowledge/ 里动过仓库里
+        # 已有的文件）会让快进被拒。这里如实说清楚，并提醒「后传的文件不受影响」——
+        # git 只认已跟踪的文件，没跟踪的一律不碰、也不会被删。
+        low = out.lower()
+        extra = ""
+        if "local changes" in low or "would be overwritten" in low or "untracked" in low:
+            extra = ("（多半是本地改动过仓库里已跟踪的文件：比如删/改过自带的那批表情包，"
+                     "或者 knowledge/ 里动过仓库里已有的文档。你自己后传的表情包和文档都是"
+                     "没跟踪的新文件，更新不会碰它们。要么把改动还原，要么先 git stash 再更新）")
         return {
             "ok": False,
             "restart": False,
             "message": "拉取失败（本地改过文件、或者历史分叉了）。这条命令只在能快进时才动，"
-                       "本地改动一律不覆盖，需要的话上服务器手动处理：" + out[-300:],
+                       "本地改动一律不覆盖，需要的话上服务器手动处理：" + extra + out[-300:],
         }
     after, _ = _git("rev-parse", "--short", "HEAD")
     if before == after:

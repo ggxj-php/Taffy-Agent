@@ -107,6 +107,9 @@ def _state():
         "embed_base_url": settings.embed_base_url(),
         "embed_key_source": settings.embed_key_source(),
         "embed_base_source": settings.embed_base_source(),
+        # 向量那一路的总开关：None = 没设过（按「三样配齐了没」自动判断）
+        "embed_switch": settings.embed_switch(),
+        "embed_on": settings.embed_on(),
         "embed_dim": EMBED_DIM,
         "kb": kb_stats(),
         # 对话上下文：模型的窗口有多大（聊天页那个百分比和自动压缩都按它算）
@@ -254,6 +257,8 @@ class EmbedRequest(BaseModel):
     embed_model: str = ""
     embed_base_url: str = ""
     embed_key: str = ""
+    # 总开关：None = 这次不动它（前端不传就是这个）
+    embed_enabled: bool | None = None
 
 
 @router.post("/api/admin/embed")
@@ -262,8 +267,13 @@ def save_embed(req: EmbedRequest, request: Request):
     base = _check_base("向量模型", req.embed_base_url)
     model = req.embed_model.strip()
     key = req.embed_key.strip()
+    if req.embed_enabled is not None:
+        settings.set_embed_enabled(req.embed_enabled)
     if not (model or base or key):
-        raise HTTPException(status_code=400, detail="一个都没填，那就先不动它喵")
+        # 只拨了开关也算改过，别当成「什么都没填」拒掉
+        if req.embed_enabled is None:
+            raise HTTPException(status_code=400, detail="一个都没填，那就先不动它喵")
+        return _state()
     settings.update_embed(model, base, key)
     return _state()
 

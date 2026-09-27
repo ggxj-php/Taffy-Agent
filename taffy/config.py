@@ -112,7 +112,10 @@ TRANSLATE_API_KEY = os.environ.get("TRANSLATE_API_KEY", "").strip()
 # 模型的上下文窗口有多大（token）。历史快填满时塔菲会自动把旧的那段压成摘要
 # （见 taffy/context.py），免得请求被模型直接拒掉（超了就是 400，那一轮就废了）。
 # 填的是「这个模型能吃多少」，不是「想留多少」；拿不准就照官方文档写。
-CONTEXT_LIMIT = int(os.environ.get("CONTEXT_LIMIT", "65536") or 65536)
+# 平时在网页后台「模型」那张卡里改更方便，改完立刻生效。
+#   注意：填**大了**的危害是把压缩推迟到模型吃不下的地方，超了那一轮直接 400；
+#   填**小了**只是压得早、多花一次摘要的钱。拿不准就往小了填。
+CONTEXT_LIMIT = int(os.environ.get("CONTEXT_LIMIT", "1000000") or 1000000)
 
 # 历史用到窗口的百分之多少就自动压缩。0.8 = 八成满就压，别等真满了——
 # 满了那一轮直接发不出去。想压得更早（更省 token、但更早丢细节）就往下调。
@@ -131,6 +134,18 @@ STICKERS_DIR = os.path.join(PROJECT_ROOT, "taffy", "web", "static", "stickers")
 
 # 后台「检查更新」用哪个 systemd 服务名重启自己（拉完新代码要重启才生效）。
 SERVICE_NAME = os.environ.get("TAFFY_SERVICE_NAME", "").strip() or "taffy-agent"
+
+# 「检查更新」的两个镜像地址。从哪拉（gitee / github）在后台选。
+# 服务器上往往只 git clone 了其中一个，另配的 remote 只有一个——切到没配过的那边就
+# 「没有远端地址」拉不了。所以这里给一份兜底：仓库里找不到对应厂家的 remote 时，
+# 直接用这个地址 fetch / pull（只读，不改本地 remote 配置）。
+# 换仓库就把这两个（或者 .env 里的 GITEE_URL / GITHUB_URL）改掉。
+GIT_MIRRORS = {
+    "gitee": os.environ.get("GITEE_URL", "").strip()
+             or "https://gitee.com/ggxj-php/Taffy-Agent.git",
+    "github": os.environ.get("GITHUB_URL", "").strip()
+              or "https://github.com/ggxj-php/Taffy-Agent.git",
+}
 
 # 输入这些词就退出对话
 EXIT_WORDS = ("exit", "quit", "退出", "拜拜")

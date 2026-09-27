@@ -7,7 +7,7 @@
 const MOODS = ['happy', 'think', 'confused', 'proud', 'cry', 'angry', 'sleepy', 'love'];
 const IMG_EXTS = ['.png', '.jpg', '.jpeg', '.gif', '.webp'];
 const NAV_KEY = 'taffy_admin_nav_closed';   // 哪几个分组收起来了
-const NAV_MINI_KEY = 'taffy_admin_nav_mini'; // 整个侧边栏收成图标条了吗
+const NAV_HIDDEN_KEY = 'taffy_admin_nav_hidden'; // 整条侧边栏收起来了吗
 
 const statusEl = document.getElementById('status');
 const loginView = document.getElementById('login-view');
@@ -17,7 +17,6 @@ const loginForm = document.getElementById('login-form');
 const passwordEl = document.getElementById('password');
 const navToggleEl = document.getElementById('nav-toggle');
 const navCollapseEl = document.getElementById('nav-collapse');
-const navCollapseIcoEl = navCollapseEl.querySelector('.nav-collapse-ico');
 const sidebarEl = document.getElementById('sidebar');
 const sidebarTipEl = document.getElementById('sidebar-tip');
 
@@ -44,6 +43,8 @@ const translateStateEl = document.getElementById('translate-state');
 const saveKeysEl = document.getElementById('save-keys');
 
 const embedModelEl = document.getElementById('embed-model');
+const embedEnabledEl = document.getElementById('embed-enabled');
+const embedSwitchStateEl = document.getElementById('embed-switch-state');
 const embedBaseEl = document.getElementById('embed-base');
 const embedKeyEl = document.getElementById('embed-key');
 const embedStateEl = document.getElementById('embed-state');
@@ -195,27 +196,28 @@ function saveClosedGroups(list) {
   }
 }
 
-function miniNav() {
+function navHidden() {
   try {
-    return localStorage.getItem(NAV_MINI_KEY) === '1';
+    return localStorage.getItem(NAV_HIDDEN_KEY) === '1';
   } catch (err) {
     return false;
   }
 }
 
-function saveMiniNav(on) {
+function saveNavHidden(on) {
   try {
-    localStorage.setItem(NAV_MINI_KEY, on ? '1' : '0');
+    localStorage.setItem(NAV_HIDDEN_KEY, on ? '1' : '0');
   } catch (err) {
     /* 存不了就算了，顶多下次打开还是展开的 */
   }
 }
 
-/* 收起 / 展开整个侧边栏：收起后只剩一列图标，页面立刻宽敞 */
-function paintMini(on) {
-  sidebarEl.classList.toggle('mini', on);
-  navCollapseIcoEl.textContent = on ? '»' : '«';
-  navCollapseEl.title = on ? '展开导航' : '收起导航';
+/* 收起 / 展开整条侧边栏：收起来页面立刻宽敞。
+   这是桌面端的事；手机上导航本来就是抽屉（顶栏那个 ☰），按钮直接藏掉。 */
+function paintNavHidden(on) {
+  sidebarEl.classList.toggle('collapsed', on);
+  navCollapseEl.textContent = on ? '展开导航' : '收起导航';
+  navCollapseEl.title = on ? '把侧边导航放出来' : '把侧边导航收起来，页面宽敞点';
 }
 
 function initNav() {
@@ -238,11 +240,11 @@ function initNav() {
     item.addEventListener('click', () => showView(item.dataset.view));
   });
 
-  paintMini(miniNav());
+  paintNavHidden(navHidden());
   navCollapseEl.addEventListener('click', () => {
-    const on = !sidebarEl.classList.contains('mini');
-    paintMini(on);
-    saveMiniNav(on);
+    const on = !sidebarEl.classList.contains('collapsed');
+    paintNavHidden(on);
+    saveNavHidden(on);
   });
 
   navToggleEl.addEventListener('click', () => {
@@ -278,6 +280,7 @@ function showLogin(message) {
   panelView.hidden = true;
   sidebarEl.hidden = true;
   navToggleEl.hidden = true;
+  navCollapseEl.hidden = true;
   logoutEl.hidden = true;
   flash(message || '先输口令喵', false);
   passwordEl.focus();
@@ -291,6 +294,7 @@ function render(state) {
   panelView.hidden = false;
   sidebarEl.hidden = false;
   navToggleEl.hidden = false;
+  navCollapseEl.hidden = false;
   logoutEl.hidden = false;
   sidebarTipEl.textContent = `口令每天换一次 · 聊天用 ${state.model} 喵`;
 
@@ -318,6 +322,7 @@ function render(state) {
   embedModelEl.value = state.embed_model || '';
   embedBaseEl.value = state.embed_base_url || '';
   embedDimEl.textContent = state.embed_dim;
+  renderEmbedSwitch(state);
   if (!state.embed_model || !state.embed_base_url) {
     embedStateEl.textContent = '还没配全，知识库现在只用原查询和英文检索词那两路喵。';
   } else if (state.embed_key_source === 'admin') {
@@ -368,6 +373,24 @@ async function load(message) {
     flash(message || '已登录喵', true);
   } catch (err) {
     showLogin(err && err.status === 401 ? '先输口令喵' : err.message);
+  }
+}
+
+/* 向量那一路的总开关：勾上 = 开。状态分三种——没设过（跟配置走）、明确开着、明确关着 */
+function renderEmbedSwitch(state) {
+  const on = Boolean(state.embed_on);
+  const set = state.embed_switch;
+  embedEnabledEl.checked = on;
+  if (set === null || set === undefined) {
+    embedSwitchStateEl.textContent = on
+      ? '现在跟着配置走：三样都配齐了，这一路在用。想彻底关掉就取消勾选再保存。'
+      : '现在跟着配置走：还没配齐（或者缺 key），这一路没用上。';
+  } else if (set) {
+    embedSwitchStateEl.textContent = on
+      ? '开关开着，这一路在用。'
+      : '开关开着，但模型 / 地址 / key 还没配齐，实际用不了喵。';
+  } else {
+    embedSwitchStateEl.textContent = '开关关着，这一路整个不用（检索只走原查询词 + 英文检索词）。';
   }
 }
 
@@ -811,7 +834,8 @@ async function loadSessions() {
       const name = el('span', 'row-name');
       name.textContent = item.uuid;
       const meta = el('span', 'row-meta');
-      meta.textContent = `${fmtSize(item.size)} · ${fmtTime(item.mtime)} · ${item.preview}`;
+      meta.textContent = `${fmtSize(item.size)} · ${fmtTime(item.mtime)} · ${item.preview}` +
+        (item.importable ? '' : ' · 老存档（只有 txt），导不回聊天页');
       row.append(name, meta);
 
       const view = el('button', 'row-btn');
@@ -1025,10 +1049,14 @@ saveEmbedEl.addEventListener('click', async () => {
     embed_base_url: changed(embedBaseEl, lastState.embed_base_url || ''),
     embed_key: embedKeyEl.value.trim(),
   };
-  if (!body.embed_model && !body.embed_base_url && !body.embed_key) {
+  // 开关只有真的拨动过才提交；没动就保持「跟着配置走」，别把它钉死
+  const switchChanged = Boolean(lastState) &&
+    embedEnabledEl.checked !== Boolean(lastState.embed_on);
+  if (!body.embed_model && !body.embed_base_url && !body.embed_key && !switchChanged) {
     flash('什么都没改喵', false);
     return;
   }
+  if (switchChanged) body.embed_enabled = embedEnabledEl.checked;
   saveEmbedEl.disabled = true;
   try {
     render(await api('/api/admin/embed', body));

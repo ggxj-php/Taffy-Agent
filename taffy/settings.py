@@ -73,6 +73,8 @@ def _load():
         "vision_model": str(raw.get("vision_model") or ""),
         "translate_model": str(raw.get("translate_model") or ""),
         "update_remote": str(raw.get("update_remote") or ""),
+        # 向量那一路的总开关：True / False；没设过就是 None（= 按「配齐了没」自动判断）
+        "embed_enabled": raw.get("embed_enabled"),
         "context_limit": raw.get("context_limit") or 0,
         "model_history": [m for m in history if isinstance(m, str)] if isinstance(history, list) else [],
     }
@@ -270,6 +272,31 @@ def embed_key_source():
 
 def embed_base_source():
     return "admin" if _load()["embed_base"] else "default"
+
+
+def embed_switch():
+    """向量那一路的总开关：True 开 / False 关 / None 没设过。
+
+    None 表示「跟着配置走」——模型、地址、key 三样配齐了就算启用（老版本的行为）。
+    """
+    value = _load()["embed_enabled"]
+    return value if isinstance(value, bool) else None
+
+
+def embed_on():
+    """向量那一路现在到底用不用：开关关了就不用；开关开着/没设过，还得三样配齐才行。"""
+    if not (embed_model() and embed_base_url() and embed_key()):
+        return False
+    switch = embed_switch()
+    return True if switch is None else switch
+
+
+def set_embed_enabled(value):
+    """拨总开关。存下来即可，索引要重启才重建（见 kb/index.py）。"""
+    with _lock:
+        data = _load()
+        data["embed_enabled"] = bool(value)
+        _write(data)
 
 
 def update_embed(model, base_url, key):

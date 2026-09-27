@@ -3,8 +3,8 @@
 知识库检索的第二路。词匹配那套（kb/index.py 的 BM25）按字面词查，中文问题跟英文
 教材在词表上零交集；向量把不同语言的同义内容映到相近位置，中文提问才搜得到英文书。
 
-模型 / 接口地址 / key 都从 settings 里取，网页后台能改。三样没配齐就不启用，
-检索自动退回纯词匹配，不会报错。
+模型 / 接口地址 / key 都从 settings 里取，网页后台能改，后台还有个总开关。开关关了、
+或者三样没配齐，这一路就不启用，检索自动退回纯词匹配，不会报错。
 """
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -34,8 +34,8 @@ class _TooManyItems(EmbedError):
 
 
 def enabled():
-    """模型 / 地址 / key 三样都配齐了才算启用。"""
-    return bool(settings.embed_model() and settings.embed_base_url() and settings.embed_key())
+    """这一路到底用不用：后台那个开关关了就关；开着/没设过，还得模型、地址、key 配齐。"""
+    return settings.embed_on()
 
 
 def signature():

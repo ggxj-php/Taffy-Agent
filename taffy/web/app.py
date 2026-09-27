@@ -125,7 +125,8 @@ def save_session(req: SaveRequest):
     # 浅拷贝一份再写：万一一轮回复正在追加历史，也不会写进去半条
     messages = list(agent.messages)
     try:
-        return sessions_store.save(req.uuid, messages)
+        # 顺手把「存的时候用了多少上下文」记进存档，导入时能对得上（见 sessions_store.load）
+        return sessions_store.save(req.uuid, messages, agent.context_usage())
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     except FileExistsError:
@@ -133,6 +134,40 @@ def save_session(req: SaveRequest):
             status_code=409,
             detail=f"已经有一份叫「{req.uuid}」的存档了喵，换个 uuid 再存（不会覆盖原来那份）",
         )
+
+
+class ImportRequest(BaseModel):
+    session_id: str
+    uuid: str = ""
+
+
+@app.post("/api/session/import")
+def import_session(req: ImportRequest):
+    """把一份存档的历史接回这个会话（见 web/sessions_store.py 的 save/load）。
+
+    接回来的是**原始 messages**，所以聊天页那条「上下文 xx%」立刻变回存档时的用量——
+    不然历史很长却显示 0%，自动压缩就一直不触发，下一轮直接撞超长。
+    """
+    try:
+        messages, saved = sessions_store.load(req.uuid)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail=f"没有叫「{req.uuid}」的存档喵")
+    entry = _session(req.session_id)
+    agent = entry["agent"]
+    # 跟聊天串行，别一边导入一边追加历史
+    with entry["lock"]:
+        # 第一条永远是当前的人设（TaffyAgent 自己保证的），后面接上存档里的对话
+        agent.messages[:] = [agent.messages[0]] + messages
+    return {
+        "ok": True,
+        "uuid": req.uuid,
+        "messages": len(messages),
+        "saved_context": saved,
+        "history": sessions_store.display(messages),
+        "context": agent.context_usage(),
+    }
 
 
 @app.post("/api/chat")

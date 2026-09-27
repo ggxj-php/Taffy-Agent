@@ -687,6 +687,13 @@ body {
   .sticker { width: 140px; height: 140px; }
 }
 
+/* 小屏手机上顶栏挤了三个按钮（导入 / 保存 / 新会话），把按钮压窄一点，
+   免得把「永雏塔菲 · 在线喵」那一块挤没了 */
+@media (max-width: 480px) {
+  .topbar { gap: 6px; padding-left: 10px; padding-right: 10px; }
+  .new-chat { padding: 7px 9px; font-size: 12px; }
+}
+
 /* ---------- 后台管理（/admin） ----------
    聊天页是 flex 满屏不滚动的，后台要能上下滚，所以整套样式都挂在 body.admin 下面。 */
 body.admin {
@@ -911,51 +918,38 @@ body.admin .chips button {
   color: var(--ink-soft);
 }
 
-/* 导航条目和分组标题前面那枚图标 */
-.nav-ico {
-  flex: none;
-  width: 18px;
-  font-size: 13px;
-  line-height: 1;
-  text-align: center;
+/* 整条侧边栏收起 / 展开（桌面端）。收起来侧边栏整个收走，页面立刻宽敞；
+   按钮在顶栏上，状态记在浏览器里（localStorage），换设备要重收一次。
+   手机上导航本来就是抽屉，用不上这个按钮。 */
+.nav-collapse[hidden] { display: none; }
+
+@media (min-width: 761px) {
+  .sidebar.collapsed { display: none; }
 }
 
-/* 整个侧边栏收起 / 展开。收起就只剩一列图标，页面立刻宽敞；
-   状态记在浏览器里（localStorage），换设备要重收一次。 */
-.nav-collapse {
+@media (max-width: 760px) {
+  .nav-collapse { display: none !important; }
+}
+
+/* 勾选类开关（比如向量检索的总闸） */
+body.admin .card label.switch {
   display: flex;
   align-items: center;
-  gap: 6px;
-  width: 100%;
-  margin-bottom: 8px;
-  padding: 7px 10px;
-  border: 1px solid var(--line);
-  border-radius: 10px;
-  background: #fff;
-  font: inherit;
-  font-size: 12px;
-  color: var(--ink-soft);
+  gap: 8px;
+  margin-top: 0;
+  font-size: 13.5px;
+  line-height: 1.5;
   cursor: pointer;
-  -webkit-tap-highlight-color: transparent;
 }
 
-.nav-collapse:hover { background: #fff0f7; }
-
-.nav-collapse-ico { font-size: 13px; line-height: 1; }
-
-.sidebar.mini { width: 54px; }
-
-.sidebar.mini .nav-head,
-.sidebar.mini .nav-text,
-.sidebar.mini .nav-collapse-text,
-.sidebar.mini .sidebar-tip { display: none; }
-
-.sidebar.mini .nav-collapse { justify-content: center; padding: 7px 0; }
-
-/* 收起状态下点不到分组标题，所以组里的条目一律露出来（不分折叠与否） */
-.sidebar.mini .nav-group.closed .nav-items { display: block; }
-.sidebar.mini .nav-item { justify-content: center; padding: 9px 0; }
-.sidebar.mini .nav-items { padding: 0 0 6px; }
+body.admin .card label.switch input[type="checkbox"] {
+  flex: none;
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  accent-color: var(--pink-dark);
+  cursor: pointer;
+}
 
 /* ---------- 仪表盘 ---------- */
 
@@ -1072,7 +1066,25 @@ body.admin .chips button {
   box-shadow: none;
 }
 
-body.admin .card .sticker-del { font-weight: 400; }
+/* 后台卡片里的按钮默认又大又圆（见 body.admin .card button），会把右上角这个
+   小圆钮撑爆——「删」字挤出圈外。这里按更高的优先级把它打回原样：固定 22×22、
+   不留内边距、字号 11px，再居中。 */
+body.admin .card .sticker-del {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  min-width: 0;
+  padding: 0;
+  font-size: 11px;
+  font-weight: 400;
+  line-height: 1;
+  border-radius: 50%;
+  color: #fff;
+  background: rgba(0, 0, 0, .5);
+  box-shadow: none;
+}
 
 .mood-empty {
   grid-column: 1 / -1;
@@ -1235,20 +1247,6 @@ body.admin .card input[type="file"] { padding: 8px 10px; font-size: 13px; }
   }
 
   .sidebar.open { transform: none; }
-
-  /* 手机上侧边栏是抽屉：不做「只剩图标」那套——抽屉里没有悬停提示，
-     光看图标认不出是哪个，而且抽屉本来就只在点开时占地方 */
-  .sidebar.mini { width: 232px; }
-
-  .sidebar.mini .nav-head,
-  .sidebar.mini .sidebar-tip { display: block; }
-
-  .sidebar.mini .nav-head { display: flex; }
-  .sidebar.mini .nav-text,
-  .sidebar.mini .nav-collapse-text { display: inline; }
-  .sidebar.mini .nav-collapse { justify-content: flex-start; padding: 7px 10px; }
-  .sidebar.mini .nav-item { justify-content: flex-start; padding: 8px 10px 8px 16px; }
-  .sidebar.mini .nav-group.closed .nav-items { display: none; }
 
   .admin-main { padding-top: 0; }
 }
