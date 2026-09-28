@@ -1,8 +1,9 @@
 'use strict';
 
 /* 后台管理前端：登录 -> 左侧导航切面板。
-   面板分五组：概览（仪表盘）、模型与接口、素材（表情包库）、文件（工作区 / 会话存档）、
-   系统（检查更新）。口令是按天算的，所以这里不存任何东西，cookie 交给浏览器自己管。 */
+   面板分六组：概览（仪表盘）、模型与接口、人设（系统提示词）、素材（表情包库）、
+   文件（知识库 / 工作区 / 会话存档）、系统（检查更新）。
+   口令是按天算的，所以这里不存任何东西，cookie 交给浏览器自己管。 */
 
 const MOODS = ['happy', 'think', 'confused', 'proud', 'cry', 'angry', 'sleepy', 'love'];
 const IMG_EXTS = ['.png', '.jpg', '.jpeg', '.gif', '.webp'];
@@ -30,6 +31,13 @@ const saveModelsEl = document.getElementById('save-models');
 const contextLimitEl = document.getElementById('context-limit');
 const contextStateEl = document.getElementById('context-state');
 const saveContextEl = document.getElementById('save-context');
+
+const promptTextEl = document.getElementById('prompt-text');
+const promptCountEl = document.getElementById('prompt-count');
+const promptLimitEl = document.getElementById('prompt-limit');
+const promptStateEl = document.getElementById('prompt-state');
+const savePromptEl = document.getElementById('save-prompt');
+const resetPromptEl = document.getElementById('reset-prompt');
 
 const chatBaseEl = document.getElementById('chat-base');
 const chatKeyEl = document.getElementById('chat-key');
@@ -285,6 +293,7 @@ function showView(name) {
 
 const VIEW_HOOKS = {
   dashboard: refreshSysinfo,
+  prompt: loadPrompt,
   stickers: loadStickers,
   knowledge: loadKnowledge,
   workspace: () => loadWorkspace(wsDir),
@@ -1110,6 +1119,63 @@ saveContextEl.addEventListener('click', async () => {
     guard(err);
   } finally {
     saveContextEl.disabled = false;
+  }
+});
+
+/* ---------------- 系统提示词（人设） ----------------
+   整段提示词单独走一个接口（不塞进 _state()——那玩意儿每次刷配置都带一遍，太大了）。
+   改完存在 admin.json 里，新开的会话立刻生效，不用重启。 */
+
+function paintPromptCount() {
+  promptCountEl.textContent = promptTextEl.value.length;
+}
+
+function renderPrompt(data) {
+  promptTextEl.value = data.text || '';
+  promptLimitEl.textContent = data.limit || 40000;
+  promptStateEl.textContent = data.custom
+    ? '现在用的是你改过的这份（存在 admin.json 里），新开的会话就用它。'
+    : '现在用的是 config.py 里内置的那份（没改过）。在这里改完保存，就换成你改的。';
+  resetPromptEl.disabled = !data.custom;   // 本来就是内置的，就没什么好「恢复」的
+  paintPromptCount();
+}
+
+async function loadPrompt() {
+  try {
+    renderPrompt(await api('/api/admin/prompt'));
+  } catch (err) {
+    guard(err);
+  }
+}
+
+promptTextEl.addEventListener('input', paintPromptCount);
+
+savePromptEl.addEventListener('click', async () => {
+  const text = promptTextEl.value.trim();
+  if (!text) {
+    flash('提示词不能空着喵——想用回内置的点「恢复内置的」', false);
+    return;
+  }
+  savePromptEl.disabled = true;
+  try {
+    renderPrompt(await api('/api/admin/prompt', { text }));
+    flash('提示词存好了喵，新开的会话立刻就是这份', true);
+  } catch (err) {
+    guard(err);
+  } finally {
+    savePromptEl.disabled = false;
+  }
+});
+
+resetPromptEl.addEventListener('click', async () => {
+  if (!confirm('把提示词恢复成 config.py 里内置的那份？你改的这份会被丢掉喵。')) return;
+  resetPromptEl.disabled = true;
+  try {
+    renderPrompt(await api('/api/admin/prompt', { text: '' }));
+    flash('恢复成内置的那份了喵', true);
+  } catch (err) {
+    resetPromptEl.disabled = false;   // 没恢复成功，得能再点
+    guard(err);
   }
 });
 

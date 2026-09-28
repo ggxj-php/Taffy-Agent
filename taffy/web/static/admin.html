@@ -55,6 +55,18 @@
         </div>
       </section>
 
+      <section class="nav-group" data-group="人设">
+        <button type="button" class="nav-head">
+          <span class="nav-text">人设</span>
+          <i class="caret" aria-hidden="true"></i>
+        </button>
+        <div class="nav-items">
+          <button type="button" class="nav-item" data-view="prompt" title="系统提示词">
+            <span class="nav-text">系统提示词</span>
+          </button>
+        </div>
+      </section>
+
       <section class="nav-group" data-group="素材">
         <button type="button" class="nav-head">
           <span class="nav-text">素材</span>
@@ -188,6 +200,37 @@
             <b>填大了比填小了危险</b>：填大了会把压缩推迟到模型真正吃不下的时候，那一轮直接被
             拒绝；填小了只是压得早一点、多花一次摘要的钱。
             改完立刻生效，不用重启。
+          </p>
+        </div>
+      </section>
+
+      <!-- ---------- 系统提示词（人设） ---------- -->
+      <section class="view" data-view="prompt" hidden>
+        <div class="card">
+          <h2>系统提示词（人设）</h2>
+          <p class="hint">
+            这就是塔菲的人设：每个新会话历史里的第一条，决定她怎么说话、守哪些规矩。<br>
+            框里显示的是<b>当前生效</b>的那份——没改过就是 <code>config.py</code> 里内置的那份。
+            <b>改完点保存，新开的会话立刻就是新的</b>，不用重启服务；
+            已经在聊的会话还留着旧的（那条消息在开会话时就定下来了，想让老会话换人设得点「新会话」）。<br>
+            改过的存在 <code>admin.json</code> 里（不进 git），所以更新代码不会把它冲掉；
+            想回到内置的就点「恢复内置的」。
+          </p>
+          <label>提示词正文（<span id="prompt-count">0</span> / <span id="prompt-limit">40000</span> 字）
+            <textarea id="prompt-text" rows="18" spellcheck="false"
+                      placeholder="点这里改塔菲的人设喵…"></textarea>
+          </label>
+          <div class="btn-row">
+            <button type="button" id="save-prompt">保存提示词</button>
+            <button type="button" id="reset-prompt" class="ghost">恢复内置的</button>
+          </div>
+          <p class="hint" id="prompt-state"></p>
+          <p class="hint">
+            改的时候留意这几条（内置那份里标着「【重要】」的）：<br>
+            塔菲每轮回复至少要发一张表情包（<code>send_sticker</code>）；代码要完整写进回答，
+            不能只丢在 workspace 里；workspace 只是临时测试区，跑完要把自己写的临时文件删掉；<br>
+            数学式子不许用 LaTeX 源码；写代码只准碰 workspace 里的东西；去知识库查过要带上出处文件名。<br>
+            删掉这些规矩塔菲就真会照做——所以改之前建议先把内置那份复制出来备份。
           </p>
         </div>
       </section>

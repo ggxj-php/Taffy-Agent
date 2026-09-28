@@ -1,7 +1,7 @@
-"""后台能改的运行配置：模型、接口地址、API Key。
+"""后台能改的运行配置：模型、接口地址、API Key、上下文上限、系统提示词。
 
 项目根目录下的 admin.json 当覆盖层，没配的项就回落到 config.py / .env 的默认值。
-改完立刻生效不用重启——llm.py 每次请求都来问一次当前值。
+改完立刻生效不用重启——llm.py 每次请求都来问一次当前值（系统提示词是开会话时问一次）。
 
 聊天和图片是两套独立的连接：可以聊天用 GLM、发图用 DeepSeek，模型名、key、
 接口地址各配各的，互不影响；某一套没配就回落到 config.py / .env 给它那套的默认值
@@ -23,6 +23,7 @@ from .config import (
     MODEL,
     PROJECT_ROOT,
     SEARCH_TRANSLATE_MODEL,
+    SYSTEM_PROMPT,
     TRANSLATE_API_KEY,
     TRANSLATE_BASE_URL,
     VISION_API_KEY,
@@ -75,6 +76,8 @@ def _load():
         "update_remote": str(raw.get("update_remote") or ""),
         # 向量那一路的总开关：True / False；没设过就是 None（= 按「配齐了没」自动判断）
         "embed_enabled": raw.get("embed_enabled"),
+        # 后台改过的系统提示词（人设）。空串 = 没改过，用 config.py 里内置的那份
+        "prompt": str(raw.get("prompt") or ""),
         "context_limit": raw.get("context_limit") or 0,
         "model_history": [m for m in history if isinstance(m, str)] if isinstance(history, list) else [],
     }
@@ -355,3 +358,36 @@ def set_context_limit(value):
         data = _load()
         data["context_limit"] = value
         _write(data)
+
+
+# ---------- 系统提示词（人设）----------
+# 后台能整段改。改过的存在 admin.json 里（不进 git），所以更新代码不会把它冲掉。
+# 取用的时机是「开会话的时候」（见 core.TaffyAgent.__init__）：改完新开的会话就是新的，
+# 已经在聊的那个还留着旧的那份——它的历史第一条在开会话时就已经定下来了。
+
+PROMPT_LIMIT = 40000       # 整段提示词的字数上限，挡住误粘贴一整本书进来
+
+
+def prompt_text():
+    """后台改过的系统提示词。没改过就是空串。"""
+    return _load()["prompt"].strip()
+
+
+def system_prompt():
+    """实际生效的系统提示词：后台改过就用改过的，否则用 config.py 里内置的那份。"""
+    return prompt_text() or SYSTEM_PROMPT
+
+
+def set_prompt(text):
+    """存后台改的系统提示词。传空串（或只有空白）= 清掉改动，回到内置那份。
+
+    太长直接拒——admin.json 每次读写都是整份，塞个几兆进去会把后台卡死。
+    """
+    text = (text or "").strip()
+    if len(text) > PROMPT_LIMIT:
+        raise ValueError(f"提示词太长了喵，最多 {PROMPT_LIMIT} 个字（现在 {len(text)} 个）")
+    with _lock:
+        data = _load()
+        data["prompt"] = text
+        _write(data)
+    return text

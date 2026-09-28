@@ -300,3 +300,42 @@ def save_context(req: ContextRequest, request: Request):
         )
     settings.set_context_limit(req.limit)
     return _state()
+
+
+# ---------- 系统提示词（人设）----------
+# 整段可改，改过的存在 admin.json 里（不进 git，所以更新代码不会冲掉）。
+# 取的时机是开会话时（见 core.TaffyAgent.__init__）：改完新开的会话就是新的、不用重启，
+# 已经在聊的会话还留着它自己那份。所以「当前生效的那份」和「某个会话在用的那份」
+# 不一定一样，后台只负责显示/改前者。
+
+
+class PromptRequest(BaseModel):
+    # 空串（或只有空白）= 恢复成 config.py 里内置的那份
+    text: str = ""
+
+
+def _prompt_payload():
+    """当前生效的提示词 + 它是哪来的 + 上限。单独走一个接口，不塞进 _state()——
+    整段提示词有几千字，每次刷配置都带一遍太浪费。"""
+    custom = settings.prompt_text()
+    return {
+        "text": settings.system_prompt(),
+        "custom": bool(custom),
+        "limit": settings.PROMPT_LIMIT,
+    }
+
+
+@router.get("/api/admin/prompt")
+def prompt_state(request: Request):
+    _require(request)
+    return _prompt_payload()
+
+
+@router.post("/api/admin/prompt")
+def save_prompt(req: PromptRequest, request: Request):
+    _require(request)
+    try:
+        settings.set_prompt(req.text)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return _prompt_payload()

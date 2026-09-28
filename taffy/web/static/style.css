@@ -854,6 +854,42 @@ body.admin .card button {
 body.admin .card button:disabled { opacity: .5; box-shadow: none; cursor: default; }
 body.admin .card button:not(:disabled):active { transform: scale(.96); }
 
+/* 卡片里的次要按钮（比如「恢复内置的」）：白底描边，不跟主按钮抢眼 */
+body.admin .card button.ghost {
+  color: var(--pink-deep);
+  background: #fff;
+  border: 1px solid var(--line);
+  box-shadow: none;
+}
+
+/* 并排两个按钮用（主 + 次） */
+.btn-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+/* 提示词那种多行输入。跟上面的 input 一样是 16px：iOS 上小于 16px 会自动放大页面 */
+body.admin .card textarea {
+  width: 100%;
+  min-height: 300px;
+  max-height: 70vh;
+  margin-top: 4px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: #fff8fc;
+  color: var(--ink);
+  font: inherit;
+  font-size: 16px;
+  line-height: 1.65;
+  outline: none;
+  resize: vertical;
+}
+
+body.admin .card textarea:focus { border-color: var(--pink-dark); background: #fff; }
+
 body.admin .hint {
   margin: 10px 0 0;
   font-size: 12.5px;

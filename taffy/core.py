@@ -4,7 +4,7 @@
 终端（ask/run）和网页后端都消费同一套事件，行为完全一致。
 """
 from . import context, settings
-from .config import EXIT_WORDS, MAX_ROUNDS, SYSTEM_PROMPT
+from .config import EXIT_WORDS, MAX_ROUNDS
 from .llm import stream_chat
 from .tools import TOOLS, execute
 
@@ -42,8 +42,10 @@ class TaffyAgent:
     """一个塔菲会话。对话历史存在实例里，所以同一个实例能记住上下文。"""
 
     def __init__(self):
-        # 第一条永远是系统提示词，网页版每个会话都从这句开始，不会丢人设
-        self.messages = [{"role": "system", "content": SYSTEM_PROMPT}]
+        # 第一条永远是系统提示词，网页版每个会话都从这句开始，不会丢人设。
+        # 现问一次（而不是 import 时定死）：后台改了提示词，新会话立刻就是新的，
+        # 不用重启；已经在聊的会话还留着它自己那份（第一条早就定下来了）。
+        self.messages = [{"role": "system", "content": settings.system_prompt()}]
 
     def context_usage(self):
         """当前上下文用量，网页版拿它显示「上下文 xx%」。"""
