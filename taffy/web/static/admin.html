@@ -301,6 +301,10 @@
             <input type="password" id="embed-key" placeholder="留空不改动；填了就覆盖"
                    autocomplete="new-password">
           </label>
+          <label>单条输入上限（token，留空或填 0 = 自动探测）
+            <input id="embed-max-tokens" inputmode="numeric" autocomplete="off"
+                   placeholder="自动探测">
+          </label>
           <button type="button" id="save-embed">保存向量模型</button>
           <p class="hint" id="embed-state"></p>
           <p class="hint">
@@ -313,7 +317,12 @@
             开着但模型 / 地址 / key 没配齐，一样用不了。<br>
             任何 OpenAI 兼容的 <code>/embeddings</code> 接口都能用。<br>
             索引维度按 <code>EMBED_DIM</code> 校验（当前 <span id="embed-dim">?</span> 维），
-            对不上会直接报错。<b>改完要重启服务才生效</b>（开关也算），而且会重新向量化一遍全库。
+            对不上会直接报错。<b>改完要重启服务才生效</b>（开关也算），而且会重新向量化一遍全库。<br>
+            <b>「单条输入上限」是给小块模型的</b>：分块本来是按字数切的（500 字），跟你这个
+            向量模型能吃多长没关系。中文 500 字差不多 400~600 token，碰上 512 / 256 / 128
+            窗口的小模型就会超——轻则被它静默截断（块尾巴永远搜不到、还不报错），重则整个
+            接口 400、向量那一路直接关掉。留空就<b>自动探测</b>一次（发两条比它自己报的用量，
+            探得出来按它收口，探不出来按不限），也可以自己填。改了得重建索引，下面会显示用了多少。
           </p>
           <p class="hint">索引状态：<span id="kb-status">还没开始建喵…</span></p>
         </div>

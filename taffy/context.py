@@ -44,8 +44,12 @@ SUMMARY_SYSTEM = """你在帮一个中文聊天机器人整理对话历史。下
 - 只输出摘要本身，不要加「摘要：」这类前缀。"""
 
 
-def _text_tokens(text):
-    """按「中文 1 字 1 token、其它 4 字符 1 token」估。"""
+def text_tokens(text):
+    """按「中文 1 字 1 token、其它 4 字符 1 token」估。
+
+    知识库那边也用它：按向量模型的输入上限反推「一块能有多少字」时，
+    用的就是同一个估法——宁可估多，也不能让块超了模型的限度被截断。
+    """
     cjk = 0
     other = 0
     for char in text:
@@ -62,19 +66,19 @@ def _message_tokens(message):
     content = message.get("content")
     total = 4  # 每条消息的角色、分隔符那点固定开销
     if isinstance(content, str):
-        total += _text_tokens(content)
+        total += text_tokens(content)
     elif isinstance(content, list):
         for part in content:
             if not isinstance(part, dict):
                 continue
             if part.get("type") == "text":
-                total += _text_tokens(part.get("text") or "")
+                total += text_tokens(part.get("text") or "")
             elif part.get("type") == "image_url":
                 total += 800
     for call in message.get("tool_calls") or []:
         function = call.get("function") or {}
-        total += _text_tokens(str(function.get("name") or ""))
-        total += _text_tokens(str(function.get("arguments") or ""))
+        total += text_tokens(str(function.get("name") or ""))
+        total += text_tokens(str(function.get("arguments") or ""))
     return total
 
 

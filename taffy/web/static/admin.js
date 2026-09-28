@@ -55,6 +55,7 @@ const embedEnabledEl = document.getElementById('embed-enabled');
 const embedSwitchStateEl = document.getElementById('embed-switch-state');
 const embedBaseEl = document.getElementById('embed-base');
 const embedKeyEl = document.getElementById('embed-key');
+const embedMaxTokensEl = document.getElementById('embed-max-tokens');
 const embedStateEl = document.getElementById('embed-state');
 const embedDimEl = document.getElementById('embed-dim');
 const kbStatusEl = document.getElementById('kb-status');
@@ -347,6 +348,7 @@ function render(state) {
   // 向量模型：模型名和地址直接填出来给主人看着改，key 只说来源
   embedModelEl.value = state.embed_model || '';
   embedBaseEl.value = state.embed_base_url || '';
+  embedMaxTokensEl.value = state.embed_max_tokens || '';   // 0 = 自动探测，留空显示
   embedDimEl.textContent = state.embed_dim;
   renderEmbedSwitch(state);
   if (!state.embed_model || !state.embed_base_url) {
@@ -434,6 +436,9 @@ function renderKb(kb) {
       ? `其中 ${kb.vectors} 块带向量，三路检索都在用`
       : '没有向量（原查询 + 英文检索词照常用）');
     text = `${parts.join('，')}。`;
+    // 块是按向量模型的单条输入上限收口的（见 kb/embed.py）：留空自动探一次，
+    // 探到什么、按多少 token 切，都在这里说清楚，别让人对着「512 的模型」瞎猜
+    if (kb.embed_note) text += ` 切块：${kb.embed_note}。`;
     if (kb.error) text += ` 最近一次向量调用出过错：${kb.error}`;
   }
   kbStatusEl.textContent = text;
@@ -1088,16 +1093,36 @@ saveEmbedEl.addEventListener('click', async () => {
   // 开关只有真的拨动过才提交；没动就保持「跟着配置走」，别把它钉死
   const switchChanged = Boolean(lastState) &&
     embedEnabledEl.checked !== Boolean(lastState.embed_on);
-  if (!body.embed_model && !body.embed_base_url && !body.embed_key && !switchChanged) {
+  // 单条输入上限同理：留空 / 0 = 自动探测。没动过就别提交，免得把填好的值冲成 0
+  const rawMax = embedMaxTokensEl.value.trim();
+  const maxNow = lastState ? (lastState.embed_max_tokens || 0) : 0;
+  let maxValue = 0;
+  if (rawMax !== '') {
+    maxValue = parseInt(rawMax, 10);
+    if (!Number.isFinite(maxValue) || maxValue < 0) {
+      flash('单条输入上限得填个数字喵（留空或 0 = 自动探测）', false);
+      return;
+    }
+    if (maxValue > 0 && maxValue < 32) {
+      flash('单条输入上限别小于 32 token 喵，块会碎成几个字', false);
+      return;
+    }
+  }
+  const maxChanged = Boolean(lastState) && maxValue !== maxNow;
+  if (!body.embed_model && !body.embed_base_url && !body.embed_key &&
+      !switchChanged && !maxChanged) {
     flash('什么都没改喵', false);
     return;
   }
   if (switchChanged) body.embed_enabled = embedEnabledEl.checked;
+  if (maxChanged) body.embed_max_tokens = maxValue;
   saveEmbedEl.disabled = true;
   try {
     render(await api('/api/admin/embed', body));
     embedKeyEl.value = '';
-    flash('向量模型存好了喵，重启服务后生效', true);
+    flash(maxChanged
+      ? '向量模型存好了喵，重启服务重建索引后按新的块长生效'
+      : '向量模型存好了喵，重启服务后生效', true);
   } catch (err) {
     guard(err);
   } finally {

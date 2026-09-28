@@ -13,8 +13,9 @@ from .index import KnowledgeBase
 
 _kb = None
 _lock = threading.Lock()
-# 后台页面拿它显示索引进度：还在建吗、向量算了多少、有没有出错
-_stats = {"building": False, "chunks": 0, "vectors": 0, "error": ""}
+# 后台页面拿它显示索引进度：还在建吗、向量算了多少、有没有出错、块按多长收口
+_stats = {"building": False, "chunks": 0, "vectors": 0, "error": "",
+          "max_tokens": 0, "embed_note": ""}
 
 
 def _get():
@@ -35,6 +36,8 @@ def warmup():
             _stats["chunks"] = len(kb.chunks)
             _stats["vectors"] = kb.vector_count()
             _stats["error"] = kb.vector_error
+            _stats["max_tokens"] = kb.max_tokens
+            _stats["embed_note"] = kb.embed_note
     except Exception as exc:
         with _lock:
             _stats["error"] = f"{type(exc).__name__}: {exc}"

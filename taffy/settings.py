@@ -19,6 +19,7 @@ from .config import (
     CONTEXT_LIMIT,
     EMBED_API_KEY,
     EMBED_BASE_URL,
+    EMBED_MAX_TOKENS,
     EMBED_MODEL,
     MODEL,
     PROJECT_ROOT,
@@ -70,6 +71,8 @@ def _load():
         "embed_key": str(raw.get("embed_key") or ""),
         "embed_base": str(raw.get("embed_base") or ""),
         "embed_model": str(raw.get("embed_model") or ""),
+        # 向量模型单条输入上限（token）。0 / 缺省 = 自动探测
+        "embed_max_tokens": raw.get("embed_max_tokens") or 0,
         "model": str(raw.get("model") or ""),
         "vision_model": str(raw.get("vision_model") or ""),
         "translate_model": str(raw.get("translate_model") or ""),
@@ -312,6 +315,27 @@ def update_embed(model, base_url, key):
             data["embed_base"] = base_url
         if key:
             data["embed_key"] = key
+        _write(data)
+
+
+def embed_max_tokens():
+    """向量模型单条输入的上限（token）。0 = 自动探测，见 kb/embed.py。"""
+    try:
+        value = int(_load()["embed_max_tokens"])
+    except (TypeError, ValueError):
+        value = 0
+    return value if value > 0 else EMBED_MAX_TOKENS
+
+
+def set_embed_max_tokens(value):
+    """存这个上限。0 / 负数 = 回到「自动探测」。改完要重建索引才生效。"""
+    try:
+        value = int(value)
+    except (TypeError, ValueError):
+        return
+    with _lock:
+        data = _load()
+        data["embed_max_tokens"] = value if value > 0 else 0
         _write(data)
 
 

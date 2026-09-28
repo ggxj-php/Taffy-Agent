@@ -36,6 +36,7 @@ from ..config import (
     KB_VECTOR_WEIGHT,
     KNOWLEDGE_DIR,
 )
+from ..context import text_tokens
 from . import embed, loader, translate
 from .lexicon import expand
 
@@ -200,8 +201,14 @@ def _is_chinese(text):
     return letters >= 20 and len(_CJK.findall(text)) * 5 >= letters
 
 
-def _split(text, size=KB_CHUNK_SIZE, overlap=KB_CHUNK_OVERLAP):
-    """按段落打包成块。单段超长就硬切，相邻块留 overlap 个字符重叠。"""
+def _split(text, size=KB_CHUNK_SIZE, overlap=KB_CHUNK_OVERLAP, max_tokens=0):
+    """按段落打包成块。单段超长就硬切，相邻块留 overlap 个字符重叠。
+
+    max_tokens > 0（= 向量模型单条输入的上限）时，打完包再按 token 收一道口：
+    块是按字数切的，而字数跟 token 数不是一回事——中文 1 字差不多 1 个 token，
+    英文 4 个字符才 1 个，同样的 500 字，中文块可能超、英文块差得远。所以只能
+    拿每一块的实际内容去折算（见 _cap），不能写死一个字数。
+    """
     paragraphs = [p.strip() for p in text.replace("\r\n", "\n").split("\n") if p.strip()]
     chunks = []
     buffer = ""
@@ -228,7 +235,51 @@ def _split(text, size=KB_CHUNK_SIZE, overlap=KB_CHUNK_OVERLAP):
 
     if buffer:
         chunks.append(buffer)
+    if max_tokens:
+        chunks = [piece for chunk in chunks for piece in _cap(chunk, max_tokens, overlap)]
     return [c.strip() for c in chunks if c.strip()]
+
+
+# 折算时留一成余量：估算本来就是估的，宁可块切小一点，也别卡着模型的边界
+_FIT_MARGIN = 0.9
+
+
+def _fit_chars(text, max_tokens):
+    """这段文字里，多少个字差不多就是 max_tokens 个 token。
+
+    按这段自己的「每字多少 token」折算：中文密（≈1 字 1 token）、英文疏（≈4 字符
+    1 token），写死字数会错得很离谱。取样前 2000 字算密度，够代表这一段了。
+    """
+    sample = text[:2000] or text
+    per_char = text_tokens(sample) / max(1, len(sample))
+    if per_char <= 0:
+        return len(text)
+    return max(1, int(max_tokens * _FIT_MARGIN / per_char))
+
+
+def _cap(chunk, max_tokens, overlap):
+    """把一块压进 token 上限，返回若干段。都在上限以内就原样返回那一块。
+
+    切完复核一遍：同一块里中英夹杂时密度并不均匀，折算出来的字数可能还是偏大，
+    那就再收一次口（最多两轮，第二轮之后基本没有偏的了）。
+    """
+    pieces = [chunk]
+    for _ in range(2):
+        if max(text_tokens(piece) for piece in pieces) <= max_tokens:
+            break
+        out = []
+        for piece in pieces:
+            if text_tokens(piece) <= max_tokens:
+                out.append(piece)
+                continue
+            budget = _fit_chars(piece, max_tokens)
+            if budget >= len(piece):
+                out.append(piece)      # 已经没法再切（密度估不准），留着别切碎
+                continue
+            step = max(1, budget - min(overlap, budget // 4))
+            out.extend(piece[start:start + budget] for start in range(0, len(piece), step))
+        pieces = out
+    return pieces
 
 
 def _scan():
@@ -243,14 +294,15 @@ def _scan():
     return sorted(found)
 
 
-def _parse(rel_path, full_path, signature, want_vectors):
+def _parse(rel_path, full_path, signature, want_vectors, max_tokens=0):
     """把一个文件解析成块，每块带出处、页码、原文和分词结果。
 
     want_vectors 为真时顺手把整批块向量化（一个文件一次发完，别按块发）。
+    max_tokens 是向量模型的单条输入上限，切块时按它收口（0 = 不限制，见 _split）。
     """
     chunks = []
     for text, page in loader.load(full_path):
-        for piece in _split(text):
+        for piece in _split(text, KB_CHUNK_SIZE, KB_CHUNK_OVERLAP, max_tokens):
             chunks.append({
                 "source": rel_path,
                 "page": page,
@@ -264,11 +316,28 @@ def _parse(rel_path, full_path, signature, want_vectors):
     return entry
 
 
-def _read_cache(want_vectors, embed_sig):
+def _chunk_params(max_tokens):
+    """切块参数。它是缓存的一部分：改了就说明块得重切，光看文件的 mtime + size 发现不了。
+
+    max_tokens 光看「值变没变」不够——它是由「模型」推出来的，而模型已经在 embed 指纹
+    里了；这里只记最终用的上限，换了模型或者换了上限都会让缓存整体作废重切（重切必须
+    重算向量，钱也只能花这一遍）。
+    """
+    return {
+        "size": KB_CHUNK_SIZE,
+        "overlap": KB_CHUNK_OVERLAP,
+        "max_tokens": int(max_tokens or 0),
+    }
+
+
+def _read_cache(want_vectors, embed_sig, chunk_params):
     """读缓存。
 
     换了向量模型（或维度）就把存着的向量全丢掉——旧向量跟新模型不在同一个空间里，
     留着算出来的分数是错的。分块和分词还能继续用，不用重新解析一遍 PDF。
+
+    切块参数对不上就整份丢掉重切（老缓存里没这个字段，按当年的默认参数算，所以
+    参数没变的话老缓存照样能用，不会白重算一遍向量）。
     """
     try:
         with open(KB_CACHE_PATH, "rb") as f:
@@ -277,6 +346,11 @@ def _read_cache(want_vectors, embed_sig):
         return {}
     if cache.get("version") != _CACHE_VERSION:
         return {}
+    stored = cache.get("chunk") or {"size": KB_CHUNK_SIZE,
+                                    "overlap": KB_CHUNK_OVERLAP,
+                                    "max_tokens": 0}
+    if stored != chunk_params:
+        return {}
     files = cache.get("files", {})
     if want_vectors and cache.get("embed") != embed_sig:
         for entry in files.values():
@@ -284,10 +358,11 @@ def _read_cache(want_vectors, embed_sig):
     return files
 
 
-def _write_cache(files, embed_sig):
+def _write_cache(files, embed_sig, chunk_params):
     os.makedirs(os.path.dirname(KB_CACHE_PATH), exist_ok=True)
     with open(KB_CACHE_PATH, "wb") as f:
-        pickle.dump({"version": _CACHE_VERSION, "embed": embed_sig, "files": files}, f)
+        pickle.dump({"version": _CACHE_VERSION, "embed": embed_sig,
+                     "chunk": chunk_params, "files": files}, f)
 
 
 def _normalize(rows):
@@ -413,6 +488,8 @@ class KnowledgeBase:
         self._vector = None
         self.vector_error = ""   # 向量那路出问题就把原因记这儿，检索自动退回词匹配
         self.skipped = []        # 解析失败的文件名，便于排查
+        self.max_tokens = 0      # 这次建索引用的「单条输入上限」，0 = 不限
+        self.embed_note = ""     # 那个上限是怎么来的（后台显示用）
 
     def vector_count(self):
         """向量算好了多少块。0 表示这一路没启用、或者还没建好。"""
@@ -422,7 +499,12 @@ class KnowledgeBase:
         """扫描 knowledge/ 建索引，返回块数。没变的部分走缓存，不重复解析、不重复花钱。"""
         want_vectors = embed.enabled()
         embed_sig = embed.signature() if want_vectors else ""
-        cached = _read_cache(want_vectors, embed_sig)
+        # 向量模型单条输入的上限：后台填了就用填的，没填自动探一次（见 kb/embed.py）。
+        # 块长按它收口——小窗口的模型（512 / 256 / 128）配 500 字的块会被静默截断或者 400。
+        probed = want_vectors
+        max_tokens = embed.max_input_tokens() if want_vectors else 0
+        chunk_params = _chunk_params(max_tokens)
+        cached = _read_cache(want_vectors, embed_sig, chunk_params)
         files = {}
         corpus = []
         weights = []
@@ -442,7 +524,7 @@ class KnowledgeBase:
                 entry = None
                 if want_vectors:
                     try:
-                        entry = _parse(rel_path, full_path, signature, True)
+                        entry = _parse(rel_path, full_path, signature, True, max_tokens)
                     except Exception as exc:
                         # 向量那路出任何问题都不该让整个知识库不可用：关掉它，退回词匹配
                         self.vector_error = f"{type(exc).__name__}: {exc}"
@@ -463,8 +545,10 @@ class KnowledgeBase:
         self._index = _SparseIndex([c["tokens"] for c in corpus]) if corpus else None
         self._weights = np.array(weights, dtype=np.float32) if corpus else None
         self._chinese = np.array([_is_chinese(c["text"]) for c in corpus], dtype=bool)
+        self.max_tokens = int(max_tokens or 0)
+        self.embed_note = embed.probe_note() if probed else ""
         # 先把带向量的缓存写到盘上，再从 files 里摘掉拼成矩阵，省得内存里存两份
-        _write_cache(files, embed_sig)
+        _write_cache(files, embed_sig, chunk_params)
         self._vector = self._load_vectors(files) if want_vectors else None
         return len(corpus)
 

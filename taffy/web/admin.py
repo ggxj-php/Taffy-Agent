@@ -111,6 +111,8 @@ def _state():
         "embed_switch": settings.embed_switch(),
         "embed_on": settings.embed_on(),
         "embed_dim": EMBED_DIM,
+        # 单条输入上限（token）。0 = 自动探测，见 kb/embed.py
+        "embed_max_tokens": settings.embed_max_tokens(),
         "kb": kb_stats(),
         # 对话上下文：模型的窗口有多大（聊天页那个百分比和自动压缩都按它算）
         "context_limit": settings.context_limit(),
@@ -259,6 +261,13 @@ class EmbedRequest(BaseModel):
     embed_key: str = ""
     # 总开关：None = 这次不动它（前端不传就是这个）
     embed_enabled: bool | None = None
+    # 单条输入上限（token）：None = 这次不动；0 = 回到自动探测
+    embed_max_tokens: int | None = None
+
+
+# 单条输入上限的合理范围。下限挡着别填个 8（块会碎成几个字，检索质量直接崩）
+EMBED_TOKENS_MIN = 32
+EMBED_TOKENS_MAX = 1_000_000
 
 
 @router.post("/api/admin/embed")
@@ -267,11 +276,19 @@ def save_embed(req: EmbedRequest, request: Request):
     base = _check_base("向量模型", req.embed_base_url)
     model = req.embed_model.strip()
     key = req.embed_key.strip()
+    if req.embed_max_tokens is not None:
+        if req.embed_max_tokens != 0 and not EMBED_TOKENS_MIN <= req.embed_max_tokens <= EMBED_TOKENS_MAX:
+            raise HTTPException(
+                status_code=400,
+                detail=f"单条输入上限得在 {EMBED_TOKENS_MIN} ~ {EMBED_TOKENS_MAX} 之间，"
+                       f"或者填 0（自动探测）喵",
+            )
+        settings.set_embed_max_tokens(req.embed_max_tokens)
     if req.embed_enabled is not None:
         settings.set_embed_enabled(req.embed_enabled)
     if not (model or base or key):
-        # 只拨了开关也算改过，别当成「什么都没填」拒掉
-        if req.embed_enabled is None:
+        # 只拨了开关 / 只改了上限也算改过，别当成「什么都没填」拒掉
+        if req.embed_enabled is None and req.embed_max_tokens is None:
             raise HTTPException(status_code=400, detail="一个都没填，那就先不动它喵")
         return _state()
     settings.update_embed(model, base, key)

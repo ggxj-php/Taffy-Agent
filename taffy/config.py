@@ -92,6 +92,13 @@ EMBED_MODEL = os.environ.get("EMBED_MODEL", "").strip()
 # 换模型或改这个值都得删掉 .cache/ 重建索引。
 EMBED_DIM = int(os.environ.get("EMBED_DIM", "1024") or 1024)
 
+# 向量模型单条输入最多能吃多少 token。0 = 自动探测（建索引时探一次，见 kb/embed.py）。
+# 为什么要管这个：分块是按字数切的（KB_CHUNK_SIZE），跟模型限度原本毫无关系。碰上
+# 小窗口的向量模型（bge-small-zh 512、一些本地小模型 128 / 256），中文块会超——轻则被
+# 静默截断（块尾巴永远搜不到），重则整个接口 400、向量那一路直接关掉。填了以后按它反推
+# 块长；留 0 就自动探一次，探不出来按「不限」处理（老行为）。
+EMBED_MAX_TOKENS = int(os.environ.get("EMBED_MAX_TOKENS", "0") or 0)
+
 # 三路检索融合时的权重（RRF，见 kb/index.py）。原查询那一路管同语言命中，向量和英文
 # 检索那两路都是「跨语言补充」，权重给高一点，英文教材才有机会被顶上来。
 KB_VECTOR_WEIGHT = 0.6
