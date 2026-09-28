@@ -48,9 +48,17 @@ def warmup():
 
 
 def stats():
-    """索引状态，给网页后台看的。"""
+    """索引状态，给网页后台看的。
+
+    建的过程中还会带上实时进度（建到哪个文件、算了多少块向量、请求多少次、重试多少次），
+    后台那张「向量模型」卡每 5 秒刷一次就能看到它在动。
+    """
     with _lock:
-        return dict(_stats)
+        data = dict(_stats)
+    kb = _kb
+    if kb is not None:
+        data["progress"] = kb.progress_snapshot()
+    return data
 
 
 def search(query, top_k=KB_TOP_K):

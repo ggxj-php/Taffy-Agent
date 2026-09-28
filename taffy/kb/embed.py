@@ -11,6 +11,7 @@
   · 一条能有多长——建索引前探一次模型的单条输入上限，反推块长（见 max_input_tokens）。
     第二件事是为了小窗口的向量模型（512 / 256 / 128），块切大了会被静默截断或者 400。
 """
+import os
 import time
 from concurrent.futures import ThreadPoolExecutor
 
@@ -22,12 +23,22 @@ from ..config import EMBED_DIM
 # 一次请求带多少条。各家的「单次最大行数」不一样：百炼 qwen3.7 系列收 20 行，
 # text-embedding-v4 / v3 只收 10 行，v1 / v2 是 25 行。先按 _BATCH_MAX 发，接口嫌多
 # 就自动砍半重发（见 embed_texts），砍出来的安全值记在 _batch 里，一个进程只碰一次壁。
-_BATCH_MAX = 20
+# 全库 8.5 万块按 64 行一批是 1328 次请求，按 20 行一批是 4248 次——建库慢不慢，一大半
+# 卡在「接口每分钟能收几次请求」上，所以默认给大一点。嫌大就用 EMBED_BATCH 调小。
+_BATCH_MAX = max(1, int(os.environ.get("EMBED_BATCH", "64") or 64))
 _batch = _BATCH_MAX
-# 同时开几个请求。全库 8.5 万块要发 4000 多次请求，串行发太慢；4 路既快又不容易被限流。
-_WORKERS = 4
-_TIMEOUT = 60
-_RETRIES = 3
+# 同时开几个请求。全库 8.5 万块要发上千次请求，串行发太慢。8 路既快又不容易被限流
+# （按 40 秒一次请求算，8 路约 12 次/分钟，多数免费额度还吃得下）；被限流就调小，
+# 接口够宽就调大，用 EMBED_WORKERS 配。
+_WORKERS = max(1, int(os.environ.get("EMBED_WORKERS", "8") or 8))
+# 单次请求等多久。接口健康时一次几秒，卡满这个数说明对面基本不会回了，别干等。
+_TIMEOUT = max(5.0, float(os.environ.get("EMBED_TIMEOUT", "60") or 60))
+_RETRIES = 3          # 普通失败（5xx、网络抖动）重试几次
+_RATE_RETRIES = 6     # 限流（429）单独多给几次：免费额度动不动就 429，等一下多半就好了
+_RETRY_CAP = 60.0     # 单次重试最多等这么久。等太久不如报错，让下次重启接着算
+
+# 建索引的实时计数，后台拿它显示进度（见 kb/index.py 的 progress_snapshot）
+_progress = {"vectors": 0, "requests": 0, "retries": 0, "failed": 0}
 
 # ---------- 单条输入上限（自动探测）----------
 # 上面那个砍半只管「一次发几条」，不管「一条有多长」。而分块是按字数切的
@@ -81,6 +92,16 @@ def signature():
 
 def describe():
     return f"{settings.embed_model()} @ {settings.embed_base_url()}"
+
+
+def progress():
+    """建索引的实时计数，给后台显示进度用。"""
+    return dict(_progress)
+
+
+def reset_progress():
+    """每次重建索引从零开始数。"""
+    _progress.update(vectors=0, requests=0, retries=0, failed=0)
 
 
 def _headers():
@@ -214,16 +235,37 @@ def probe_note():
     return ""
 
 
+def _retry_delay(resp, attempt):
+    """重试前等多久。限流优先听它 Retry-After 的，没给就指数退避（1.5 / 3 / 6 …秒）。"""
+    if resp is not None:
+        after = (getattr(resp, "headers", None) or {}).get("Retry-After")
+        if after:
+            try:
+                return min(_RETRY_CAP, max(0.5, float(after)))
+            except (TypeError, ValueError):
+                pass                       # 有的是给日期而不是秒数，认不出来就退避
+    return min(_RETRY_CAP, 1.5 * (2 ** max(0, attempt - 1)))
+
+
 def _post(texts):
-    """发一批，失败重试几次。返回 list[list[float]]，顺序跟 texts 一致。"""
+    """发一批，失败重试几次。返回 list[list[float]]，顺序跟 texts 一致。
+
+    限流（429）单独多给几次、并且优先听它 Retry-After 的话：免费额度的向量接口很
+    容易 429，而建全库要几千次请求，没点耐心根本建不完。真建不完也不怕——算好的文件
+    都在缓存里，重启会接着没算完的往下走（见 index.py 的 build）。
+    """
     url = settings.embed_base_url().rstrip("/") + "/embeddings"
     headers = _headers()
     # 不传 dimensions：有的服务商不认这个参数，传了反而 400。默认维度拿回来校验就行。
     payload = {"model": settings.embed_model(), "input": texts}
     want = EMBED_DIM
     last = ""
+    attempt = 0
+    limited = False
 
-    for attempt in range(_RETRIES):
+    while True:
+        _progress["requests"] += 1
+        resp = None
         try:
             resp = requests.post(url, headers=headers, json=payload, timeout=_TIMEOUT)
         except requests.RequestException as exc:
@@ -251,16 +293,29 @@ def _post(texts):
                         f"{settings.embed_model()} 返回的是 {got} 维，但 EMBED_DIM 配的是 {want} 维。"
                         f"把 EMBED_DIM 改成 {got}，或者删掉 .cache/ 重建索引"
                     )
+                _progress["vectors"] += len(vectors)
                 return vectors
             if resp.status_code == 400 and len(texts) > 1:
                 # 多于一行的批次碰到 400，先当成「塞太多行了」——各家的上限不一样，
                 # 报错措辞也五花八门，让上层砍半重发比猜文案稳。砍到只剩一行还 400，
                 # 那就是这批内容本身有问题（比如单行 token 超长），如实报出去。
                 raise _TooManyItems(f"HTTP 400: {resp.text[:200]}")
+            if resp.status_code == 429:
+                limited = True
             last = f"HTTP {resp.status_code}: {resp.text[:200]}"
-        if attempt + 1 < _RETRIES:  # 限流 / 网络抖动，退避一下再试
-            time.sleep(1.5 * (attempt + 1))
 
+        attempt += 1
+        if attempt >= (_RATE_RETRIES if limited else _RETRIES):
+            break
+        _progress["retries"] += 1
+        time.sleep(_retry_delay(resp, attempt))
+
+    _progress["failed"] += 1
+    if limited:
+        raise EmbedError(
+            f"向量化一直被限流（{describe()}）：{last}。这是接口的速率限制，不是配置问题——"
+            f"等几分钟重启服务，会接着没算完的文件往下算，已经算好的不会重来"
+        )
     raise EmbedError(f"向量化失败（{describe()}）：{last}")
 
 

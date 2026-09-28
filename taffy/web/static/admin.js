@@ -422,27 +422,57 @@ function renderEmbedSwitch(state) {
   }
 }
 
-/* 知识库索引状态那一行。建向量要好几分钟，所以单独抽出来，刷新时别碰输入框 */
+/* 秒数说成人话：45 秒 / 12 分 30 秒 / 3 小时 20 分 */
+function humanSeconds(seconds) {
+  const total = Math.round(seconds);
+  if (total < 60) return `${total} 秒`;
+  const minutes = Math.floor(total / 60);
+  if (minutes < 60) return `${minutes} 分 ${total % 60} 秒`;
+  return `${Math.floor(minutes / 60)} 小时 ${minutes % 60} 分`;
+}
+
+/* 索引 / 向量库状态那一行。建向量要好几分钟，所以单独抽出来，刷新时别碰输入框。
+   这一段也是「到底建成没有」的答案：建好会说「全部 N 块都带向量 —— 向量检索已生效」，
+   建的过程中会显示进度（文件 x/y、算了多少块、请求 / 重试 / 失败次数、跑了多久、多快）。 */
 function renderKb(kb) {
-  const write = (node) => { if (node) node.textContent = text; };
   let text;
-  if (!kb || (!kb.chunks && !kb.building)) {
+  const live = (kb && kb.progress) || null;
+  const building = Boolean(kb && kb.building);
+  if (!kb || (!kb.chunks && !building)) {
     text = '还没开始建喵（knowledge/ 里可能没文档）。';
-  } else {
-    const parts = [];
-    if (kb.building) parts.push('正在建');
-    parts.push(`收进来 ${kb.chunks} 块`);
-    parts.push(kb.vectors
-      ? `其中 ${kb.vectors} 块带向量，三路检索都在用`
-      : '没有向量（原查询 + 英文检索词照常用）');
+  } else if (building) {
+    const parts = ['正在建'];
+    if (live && live.files_total) parts.push(`文件 ${live.files_done}/${live.files_total}`);
+    if (live && live.chunks) parts.push(`已切 ${live.chunks} 块`);
+    if (live && live.vectors) parts.push(`已算向量 ${live.vectors} 块`);
+    if (live && live.current) parts.push(`当前：${live.current}`);
+    if (live && live.requests) {
+      let calls = `请求 ${live.requests} 次`;
+      if (live.retries) calls += `，重试 ${live.retries} 次`;
+      if (live.failed) calls += `，失败 ${live.failed} 批`;
+      parts.push(calls);
+    }
+    if (live && live.elapsed > 2) {
+      let pace = `已用 ${humanSeconds(live.elapsed)}`;
+      if (live.speed) pace += `，约 ${live.speed} 块/秒`;
+      parts.push(pace);
+    }
     text = `${parts.join('，')}。`;
-    // 块是按向量模型的单条输入上限收口的（见 kb/embed.py）：留空自动探一次，
-    // 探到什么、按多少 token 切，都在这里说清楚，别让人对着「512 的模型」瞎猜
-    if (kb.embed_note) text += ` 切块：${kb.embed_note}。`;
-    if (kb.error) text += ` 最近一次向量调用出过错：${kb.error}`;
+  } else {
+    const parts = [`收进来 ${kb.chunks} 块`];
+    if (kb.vectors >= kb.chunks) {
+      parts.push(`全部 ${kb.vectors} 块都带向量 —— 向量检索已生效`);
+    } else if (kb.vectors) {
+      parts.push(`${kb.vectors} 块带向量，还有 ${kb.chunks - kb.vectors} 块没有 —— 重启会接着补`);
+    } else {
+      parts.push('没有向量（原查询 + 英文检索词照常用）');
+    }
+    text = `${parts.join('，')}。`;
   }
+  if (!building && kb && kb.embed_note) text += ` 切块：${kb.embed_note}。`;
+  if (!building && kb && kb.error) text += ` 向量那一路的报错：${kb.error}`;
   kbStatusEl.textContent = text;
-  write(knStatusEl);
+  if (knStatusEl) knStatusEl.textContent = text;
 }
 
 async function refreshKbStatus() {
@@ -1217,7 +1247,7 @@ window.addEventListener('hashchange', () => {
 });
 
 /* 每 5 秒刷一次「当前这个面板」里会变的东西（仪表盘 / 索引进度） */
-const POLLED = { dashboard: refreshSysinfo, embed: refreshKbStatus };
+const POLLED = { dashboard: refreshSysinfo, embed: refreshKbStatus, knowledge: refreshKbStatus };
 setInterval(() => {
   const fn = POLLED[activeView];
   if (fn) fn();

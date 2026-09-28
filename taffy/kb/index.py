@@ -22,6 +22,7 @@ import math
 import os
 import pickle
 import re
+import time
 
 import numpy as np
 
@@ -42,6 +43,14 @@ from .lexicon import expand
 
 # 缓存结构变了就把版本号加一，旧缓存会自动失效重建
 _CACHE_VERSION = 6
+
+# 建索引时每过这么多文件就往盘上落一次缓存。全库向量化要发几千次请求、跑很久，
+# 中途被杀掉的话，已经算好的也得留得住（见 build）。
+_CHECKPOINT_FILES = 20
+
+# 连着这么多个文件的向量都算不出来，就不再一个个去磕了：剩下的文件这次先只建词索引，
+# 让建索引早点结束、能先用上；重启会接着补向量（见 build）。
+_VECTOR_FAIL_LIMIT = 2
 
 # BM25 参数：k1 控制词频饱和，b 控制长度归一化强度
 _K1 = 1.5
@@ -490,10 +499,40 @@ class KnowledgeBase:
         self.skipped = []        # 解析失败的文件名，便于排查
         self.max_tokens = 0      # 这次建索引用的「单条输入上限」，0 = 不限
         self.embed_note = ""     # 那个上限是怎么来的（后台显示用）
+        self.vector_missing = 0  # 没算上向量的块数（多半是限流，下次重启会接着补）
+        # 建索引的进度，后台拿 progress_snapshot() 显示（见 kb/__init__.py 的 stats）
+        self.progress = {
+            "stage": "还没开始",
+            "files_done": 0,
+            "files_total": 0,
+            "chunks": 0,
+            "current": "",
+            "started": 0.0,       # 开始建的时刻，用来算已用时间和速度
+        }
 
     def vector_count(self):
-        """向量算好了多少块。0 表示这一路没启用、或者还没建好。"""
-        return 0 if self._vector is None else self._vector.size
+        """真正算好的向量块数。0 表示这一路没启用、或者一块都没算上。"""
+        if self._vector is None:
+            return 0
+        return self._vector.size - self.vector_missing
+
+    def progress_snapshot(self):
+        """给后台看的进度：建到哪儿了 + 向量请求的情况 + 已经跑了多久、多快。
+
+        建的过程中「算了多少块向量」取自实时计数（每一批回来就加），建完则以矩阵里
+        真正对齐的块数为准。速度按「算好的向量块数 / 已用秒数」算——建库慢不慢基本
+        就卡在向量那一段上，看这个数就知道是接口慢还是自己在磨蹭。
+        """
+        snapshot = dict(self.progress)
+        snapshot.update(embed.progress())
+        if snapshot.get("stage") != "正在建":
+            snapshot["vectors"] = self.vector_count()
+        started = self.progress.get("started") or 0.0
+        elapsed = max(0.0, time.time() - started) if started else 0.0
+        snapshot["elapsed"] = round(elapsed, 1)
+        snapshot["speed"] = round(snapshot["vectors"] / elapsed, 2) if elapsed > 2 and snapshot["vectors"] else 0.0
+        snapshot["missing"] = self.vector_missing
+        return snapshot
 
     def build(self):
         """扫描 knowledge/ 建索引，返回块数。没变的部分走缓存，不重复解析、不重复花钱。"""
@@ -505,11 +544,21 @@ class KnowledgeBase:
         max_tokens = embed.max_input_tokens() if want_vectors else 0
         chunk_params = _chunk_params(max_tokens)
         cached = _read_cache(want_vectors, embed_sig, chunk_params)
-        files = {}
+        embed.reset_progress()
+        names = _scan()
+        known = set(names)
+        self.progress.update(stage="正在建", files_total=len(names), files_done=0,
+                             chunks=0, current="", started=time.time())
+        # 从缓存里已有的条目开始（只留文件还在的），这样中途落盘时不会把还没轮到、
+        # 但上一轮已经算好的文件从缓存里挤掉
+        files = {path: entry for path, entry in cached.items() if path in known}
         corpus = []
         weights = []
+        vector_failed = []          # 向量没算上的文件（多半是限流），原因也带上
+        vector_stopped = False      # 连着失败就不再一个个去磕了，剩下的先只建词索引
 
-        for rel_path in _scan():
+        for rel_path in names:
+            self.progress["current"] = rel_path
             full_path = os.path.join(KNOWLEDGE_DIR, rel_path)
             stat = os.stat(full_path)
             signature = (stat.st_mtime, stat.st_size)
@@ -522,24 +571,49 @@ class KnowledgeBase:
 
             if stale:
                 entry = None
-                if want_vectors:
+                if want_vectors and not vector_stopped:
                     try:
                         entry = _parse(rel_path, full_path, signature, True, max_tokens)
                     except Exception as exc:
-                        # 向量那路出任何问题都不该让整个知识库不可用：关掉它，退回词匹配
-                        self.vector_error = f"{type(exc).__name__}: {exc}"
-                        want_vectors = False
+                        # 一个文件的向量算不出来（多半是限流掐了）不该让整库白建：这个
+                        # 文件先不带向量存着，接着算后面的。算好的都在缓存里，下次重启
+                        # 会接着没算完的往下走，不会从头重来、也不白花第二遍钱。
+                        vector_failed.append(f"{rel_path}（{type(exc).__name__}: {exc}）")
+                        if len(vector_failed) >= _VECTOR_FAIL_LIMIT:
+                            # 连着几个文件都算不出来，说明不是偶发：再一个个去磕（每个
+                            # 文件都要退避重试两分钟）只是白等。剩下的文件这次先只建词
+                            # 索引，让整个建索引早点结束、能用上；重启再接着补向量。
+                            vector_stopped = True
                 if entry is None:
                     try:
-                        entry = _parse(rel_path, full_path, signature, False)
+                        entry = _parse(rel_path, full_path, signature, False, max_tokens)
                     except Exception:
                         self.skipped.append(rel_path)
+                        self.progress["files_done"] += 1
                         continue
 
             files[rel_path] = entry
             corpus.extend(entry["chunks"])
             # 权重按来源算，不写进缓存，改了 KB_SOURCE_WEIGHTS 立刻生效
             weights.extend([_weight_of(rel_path)] * len(entry["chunks"]))
+            self.progress["files_done"] += 1
+            self.progress["chunks"] = len(corpus)
+            # 中途落一次盘：全库向量化要跑很久（几千次请求），万一中途服务被重启 /
+            # 被杀掉，算好的这部分也留得住，下次接着没算完的往下走。整份写一次是
+            # O(缓存大小)，所以隔一批写一次，别每个文件都写。
+            if self.progress["files_done"] % _CHECKPOINT_FILES == 0:
+                _write_cache(files, embed_sig, chunk_params)
+
+        self.progress["current"] = ""
+        if vector_failed:
+            shown = "；".join(vector_failed[:3])
+            if len(vector_failed) > 3:
+                shown += f"…（还有 {len(vector_failed) - 3} 个）"
+            tail = "，剩下的文件这次先只建词索引" if vector_stopped else ""
+            self.vector_error = (
+                f"{len(vector_failed)} 个文件的向量没算上{tail}，"
+                f"重启服务会接着算（算好的不会重来）：{shown}"
+            )
 
         self.chunks = corpus
         self._index = _SparseIndex([c["tokens"] for c in corpus]) if corpus else None
@@ -550,21 +624,40 @@ class KnowledgeBase:
         # 先把带向量的缓存写到盘上，再从 files 里摘掉拼成矩阵，省得内存里存两份
         _write_cache(files, embed_sig, chunk_params)
         self._vector = self._load_vectors(files) if want_vectors else None
+        self.progress["stage"] = self._done_stage(want_vectors, corpus)
         return len(corpus)
 
+    def _done_stage(self, want_vectors, corpus):
+        """建完之后一句话说清「向量到底建成了没」，后台直接显示它。"""
+        if not corpus:
+            return "知识库是空的"
+        if not want_vectors:
+            return "没走向量这一路"
+        if self.vector_count() >= len(corpus):
+            return "向量建好了"
+        return "部分完成" if self.vector_count() else "没有向量"
+
     def _load_vectors(self, files):
-        """把各文件的向量按块序拼成一个矩阵。顺序对不齐就返回 None（不启用向量那一路）。"""
+        """把各文件的向量按块序拼成一个矩阵。
+
+        有文件没算上向量（多半是限流被掐了）时，那些块填**零向量**：零向量跟谁都
+        不相似，检索时自然被跳过，但其余已经算好的块照样能走向量那一路——比整库退回
+        纯词匹配好得多。缺了哪些块记在 vector_missing 里，后台会说出来。
+         """
         pieces = []
         total = 0
+        missing = 0
         for rel_path in _scan():
             entry = files.get(rel_path)
             if entry is None:
                 return None
+            count = len(entry["chunks"])
             vectors = entry.pop("vectors", None)
-            if vectors is None or len(vectors) != len(entry["chunks"]):
-                return None
+            if vectors is None or len(vectors) != count:
+                missing += count
+                vectors = np.zeros((count, EMBED_DIM), dtype=np.float16)
             pieces.append(vectors)
-            total += len(vectors)
+            total += count
         if not total or total != len(self.chunks):
             return None
 
@@ -575,6 +668,7 @@ class KnowledgeBase:
             matrix[at:at + len(piece)] = piece
             at += len(piece)
             pieces[index] = None
+        self.vector_missing = missing
         return _VectorIndex(matrix)
 
     def search(self, query, top_k):
