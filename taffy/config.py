@@ -49,6 +49,25 @@ CXX = os.environ.get("CXX", "g++").strip() or "g++"
 # 部署到别的机器上如果搜不出东西、又确认是网络出不去，就把这个设成 system。
 SEARCH_PROXY = os.environ.get("SEARCH_PROXY", "").strip()
 
+
+# 联网搜索的自我保护。引擎风控盯的是「单位时间内的请求量」：偶尔搜几下没事，连着
+# 搜几十下就会被标记；被标记了还接着撞，封禁会一直续期。这三个值就是用来避免这种
+# 情况的：
+#   SEARCH_MIN_INTERVAL  同一家引擎两次请求至少隔几秒（默认 2，设 0 关掉限速）
+#   SEARCH_COOLDOWN      某家被判风控后先歇多少秒，连续被挡会翻倍（默认 600）
+#   SEARCH_CACHE_TTL     同一个查询多少秒内直接复用上次结果（默认 300）
+def _env_seconds(name: str, default: float) -> float:
+    """读一个秒数配置。写错了就当没配——搜索参数配错不该把程序拦在启动门口。"""
+    try:
+        return float(os.environ.get(name, "").strip() or default)
+    except ValueError:
+        return default
+
+
+SEARCH_MIN_INTERVAL = _env_seconds("SEARCH_MIN_INTERVAL", 2.0)
+SEARCH_COOLDOWN = _env_seconds("SEARCH_COOLDOWN", 600.0)
+SEARCH_CACHE_TTL = _env_seconds("SEARCH_CACHE_TTL", 300.0)
+
 # 网页后台（/admin）登录口令的前缀。
 # 口令是按天算的：md5(ADMIN_PASSWORD_PREFIX + 当天日期 YYMMDD)，所以这里配的
 # 前缀就是这个口令里唯一的秘密。代码里**故意不留默认值**——留了就等于把口令公开，
