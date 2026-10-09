@@ -40,7 +40,13 @@ class _HTMLExtractor(HTMLParser):
 
 
 def _read_text(path):
-    """按 utf-8 -> gbk 试编码，都不行就用替换字符硬解，保证不炸。"""
+    """按 utf-8 -> gbk 试编码；都不认就硬解，但替换字符太多就当读不了、抛出去。
+
+    以前这里最后一步直接 errors="replace" 返回，结果满篇 U+FFFD 的文档也被当正文
+    静默索引了（检索到一堆乱码，还看不出是编码问题）。现在硬解的同时数一下替换字符，
+    比例太高说明根本不是可读文本（编码识别不了 / 内容本身是二进制），抛异常让上层
+    记进 skipped，别把乱码塞进索引。
+    """
     for encoding in ("utf-8", "gbk"):
         try:
             with open(path, "r", encoding=encoding) as f:
@@ -48,7 +54,11 @@ def _read_text(path):
         except UnicodeDecodeError:
             continue
     with open(path, "r", encoding="utf-8", errors="replace") as f:
-        return f.read()
+        text = f.read()
+    broken = text.count("\ufffd")
+    if broken and broken * 20 >= len(text):   # 替换字符占到 5% 以上就认为不是可读文本
+        raise ValueError(f"{os.path.basename(path)} 编码识别不了（替换字符过多），已跳过")
+    return text
 
 
 def _load_plain(path):

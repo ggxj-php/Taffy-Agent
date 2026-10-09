@@ -9,12 +9,9 @@ PROJECT_ROOT = str(Path(__file__).resolve().parent.parent)
 
 # API Key 从项目根目录的 .env 读取，不要写死在代码里
 load_dotenv(Path(PROJECT_ROOT) / ".env")
+# 这里**不**因为缺 key 就抛异常：key 也可以在后台 admin.json 里配（见 settings.py），
+# import 时就崩会让人连后台都打不开。缺 key 留到真正发请求的时候再报（见 llm.py）。
 API_KEY = os.environ.get("DEEPSEEK_API_KEY", "").strip()
-if not API_KEY:
-    raise RuntimeError(
-        "没读到 DEEPSEEK_API_KEY。请在项目根目录建一个 .env 文件，内容为：\n"
-        "    DEEPSEEK_API_KEY=sk-你的key"
-    )
 
 BASE_URL = "https://api.deepseek.com/v1"
 #https://api.deepseek.com/v1

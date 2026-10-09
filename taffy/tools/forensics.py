@@ -19,6 +19,10 @@ _MAX_READ = 128 * 1024 * 1024
 _MAX_CARVE_SIZE = 8 * 1024 * 1024
 # 熵值只在文件开头采这么多字节，全量统计太慢
 _ENTROPY_SAMPLE = 256 * 1024
+# 单条提取出来的字符串最多显示这么多字符（长到离谱的一条会把上下文灌满）
+_MAX_STR = 300
+# 字符串报告整体的字符上限
+_MAX_STR_OUTPUT = 8000
 
 SPECS = [
     {
@@ -127,9 +131,9 @@ _SIGNATURES = (
 _CARVE_SIGNATURES = (
     ("jpg", b"\xff\xd8\xff", b"\xff\xd9"),
     ("png", b"\x89PNG\r\n\x1a\n", b"IEND\xaeB`\x82"),
-    ("gif", b"GIF89a", b"\x00\x3b"),
+    ("gif", b"GIF89a", b"\x3b"),                 # GIF 真尾标记就是单个 0x3B
     ("pdf", b"%PDF", b"%%EOF"),
-    ("zip", b"PK\x03\x04", None),
+    ("zip", b"PK\x03\x04", b"PK\x05\x06"),       # 用中央目录结束记录当结尾，别整包 8MB
 )
 
 _EXIF_IFD0 = {
@@ -265,8 +269,16 @@ def extract_strings(path: str, min_len: int = 4, keyword: str = "", limit: int =
         lines.append(f"含关键字「{keyword}」的字符串：{len(found)} 条")
     else:
         lines.append(f"共提取到 {len(found)} 条可打印字符串（最短 {min_len} 字符）")
+    shown = 0
     for offset, value in found[:limit]:
-        lines.append(f"[0x{offset:08x}] {value}")
+        if len(value) > _MAX_STR:      # 一条长到离谱的字符串本身就够把上下文灌满了
+            value = value[:_MAX_STR] + "…"
+        line = f"[0x{offset:08x}] {value}"
+        if shown + len(line) + 1 > _MAX_STR_OUTPUT:
+            lines.append("…（报告已经够长了，剩下的用 keyword 过滤更省事）")
+            break
+        lines.append(line)
+        shown += len(line) + 1
     if len(found) > limit:
         lines.append(f"…… 还有 {len(found) - limit} 条没显示，可以加 keyword 过滤或调大 limit")
     if truncated:
@@ -295,11 +307,29 @@ def carve_files(path: str, out_dir: str = "carved", max_files: int = 50) -> str:
                 if stop < 0:
                     continue
                 stop += len(tail)
+                if tail == b"PK\x05\x06":
+                    # ZIP 的 EOCD 记录后面还有 18 字节 + 可变长注释，取完整
+                    if stop + 18 <= len(data):
+                        comment = int.from_bytes(data[stop + 16:stop + 18], "little")
+                        stop = min(stop + 18 + comment, len(data))
+                    else:
+                        stop = len(data)
             else:
                 stop = min(begin + _MAX_CARVE_SIZE, len(data))
             hits.append((begin, stop, ext))
 
     hits.sort()
+    # 同一个容器里会有一串嵌套的签名（比如 ZIP 里每个条目都是 PK\x03\x04），
+    # 按区间去重，不然同一段内容会被反复抠出来写盘。
+    kept = []
+    ext_stop = {}
+    for begin, stop, ext in hits:
+        if begin < ext_stop.get(ext, -1):
+            continue
+        kept.append((begin, stop, ext))
+        ext_stop[ext] = stop
+    hits = kept
+
     lines = [f"样本：{path}", f"命中签名：{len(hits)} 处，写入 workspace/{out_dir}/"]
     written = 0
     for begin, stop, ext in hits:

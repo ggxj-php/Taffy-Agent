@@ -88,15 +88,16 @@ def _load():
 
 
 def _write(data):
-    """先写临时文件再替换，避免写一半断电留下半截 JSON。"""
+    """先写临时文件再替换，避免写一半断电留下半截 JSON。
+
+    临时文件一开始就用 0600 建，别先建再 chmod——那中间会有一段窗口期，含明文 key
+    的临时文件是 0644，别的用户能读到。（Windows 上本来就认不了这个权限位。）
+    """
     tmp = SETTINGS_PATH + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as fp:
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as fp:
         json.dump(data, fp, ensure_ascii=False, indent=2)
     os.replace(tmp, SETTINGS_PATH)
-    try:
-        os.chmod(SETTINGS_PATH, 0o600)  # 里面有 key，别让别的用户读到
-    except OSError:
-        pass  # Windows 上不认这个权限位，忽略
 
 
 # ---------- 模型 ----------

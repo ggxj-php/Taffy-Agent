@@ -17,6 +17,8 @@ from ..config import GIT_MIRRORS, PROJECT_ROOT, SERVICE_NAME
 TIMEOUT = 120
 # 要密码就直接失败，别把后台请求挂在那儿等输入（服务器上的仓库是公开的，用不着密码）
 _ENV = dict(os.environ, GIT_TERMINAL_PROMPT="0")
+# 把所有 git 操作串起来，见 _git。
+_git_lock = threading.Lock()
 
 
 def _run(args, timeout=TIMEOUT):
@@ -37,7 +39,10 @@ def _run(args, timeout=TIMEOUT):
 
 
 def _git(*args, **kwargs):
-    return _run(["git", *args], **kwargs)
+    # 串行化所有 git 操作：后台「检查更新」和「一键更新」都可能被连点，两条 git 同时
+    # 动 .git 会互踩（撞 index.lock），排队跑最省事。
+    with _git_lock:
+        return _run(["git", *args], **kwargs)
 
 
 def remotes():
@@ -190,7 +195,8 @@ def apply(provider):
         # git 只认已跟踪的文件，没跟踪的一律不碰、也不会被删。
         low = out.lower()
         extra = ""
-        if "local changes" in low or "would be overwritten" in low or "untracked" in low:
+        if ("local changes" in low or "would be overwritten" in low
+                or "untracked working tree files would be overwritten" in low):
             extra = ("（多半是本地改动过仓库里已跟踪的文件：比如删/改过自带的那批表情包，"
                      "或者 knowledge/ 里动过仓库里已有的文档。你自己后传的表情包和文档都是"
                      "没跟踪的新文件，更新不会碰它们。要么把改动还原，要么先 git stash 再更新）")

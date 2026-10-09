@@ -39,6 +39,7 @@ MAX_OUTPUT_CHARS = 4000
 MAX_STRING_SCAN = 4096          # INT 21H 09H 往后找 '$' 最多找这么多字节
 MAX_SOURCE = 200000
 MAX_MEM_ROWS = 12
+MAX_DATA_ELEMENTS = 1 << 20     # 一段数据最多展开这么多元素，挡住嵌套 DUP 的指数爆炸
 
 # 段值：代码段 1000H，各数据段依次 2000H / 3000H（每个段值差 1000H 正好隔 64 KiB）
 CODE_SEG_VALUE = 0x1000
@@ -453,6 +454,20 @@ def _parse_operand(text, branch=False):
     return ("maybe_mem", body, size)
 
 
+def _disp_size(disp):
+    """位移占几个字节：没有是 0，能塞进有符号 8 位是 1，否则 2。
+
+    只认纯整数字面量；表达式 / 符号这时值还不知道，按最宽的 2 估算（宁可估大）。
+    """
+    if not isinstance(disp, str) or not disp.strip():
+        return 0
+    try:
+        value = int(disp.strip(), 0)
+    except (TypeError, ValueError):
+        return 2
+    return 1 if -128 <= value <= 127 else 2
+
+
 def _length(mnemonic, operands):
     """估算这条指令占几个字节，只用来推进偏移和算取指周期。"""
     if mnemonic in _BRANCH_LEN:
@@ -476,8 +491,7 @@ def _length(mnemonic, operands):
     if mems:
         total += 1                                     # ModR/M
         disp = mems[0][4] if mems[0][0] == "mem" else mems[0][1]
-        compact = isinstance(disp, str) and not disp.strip()
-        total += 0 if compact else 2
+        total += _disp_size(disp)
     elif len(regs) >= 2:
         total += 1
     narrow = bool(regs) and all(op[0] == "r8" for op in regs)
@@ -568,8 +582,14 @@ def _validate(mnemonic, operands, line):
         raise _AsmError("POP CS 是非法的", line)
 
 
-def _expand_data(text, symbols, here, line):
-    """把 DB / DW 后面那串东西展开成元素表。"""
+def _expand_data(text, symbols, here, line, budget=None):
+    """把 DB / DW 后面那串东西展开成元素表。
+
+    budget 是个共享计数，拦住 65535 DUP(65535 DUP(0)) 这种嵌套：光限单层 count
+    没用，展开出来的元素总数才能决定会不会把内存撑爆。
+    """
+    if budget is None:
+        budget = [MAX_DATA_ELEMENTS]
     out = []
     for element in _split_operands(text):
         stripped = element.strip()
@@ -578,8 +598,18 @@ def _expand_data(text, symbols, here, line):
             count = _Expr(match.group(1), symbols, here).parse()
             if count < 0 or count > 0xFFFF:
                 raise _AsmError(f"DUP 的重复次数要在 0~65535 之间，这里是 {count}", line)
-            out.extend(_expand_data(match.group(2), symbols, here, line) * count)
+            inner = _expand_data(match.group(2), symbols, here, line, budget)
+            need = len(inner) * count
+            if need > budget[0]:
+                raise _AsmError(
+                    f"数据定义太大：展开后超过 {MAX_DATA_ELEMENTS} 个元素，不给了喵", line)
+            budget[0] -= need
+            out.extend(inner * count)
             continue
+        if budget[0] <= 0:
+            raise _AsmError(
+                f"数据定义太大：展开后超过 {MAX_DATA_ELEMENTS} 个元素，不给了喵", line)
+        budget[0] -= 1
         if stripped == "?":
             out.append(("zero", ""))
         elif len(stripped) >= 2 and stripped[0] in _TEXT_MARKS and stripped[-1] == stripped[0]:
@@ -597,7 +627,7 @@ def _elements_size(elements, unit, line):
     for kind, payload in elements:
         if kind == "str":
             if unit != 1:
-                raise _AsmError("DW 里不能放字符串，要放字符串请用 DB", line)
+                raise _AsmError("只有 DB 里能放字符串，DW / DD 放不下", line)
             total += len(payload.encode("utf-8"))
         else:
             total += unit
@@ -611,13 +641,12 @@ def _data_bytes(elements, unit, symbols, here, line):
             raw.extend([0] * unit)
         elif kind == "str":
             if unit != 1:
-                raise _AsmError("DW 里不能放字符串，要放字符串请用 DB", line)
+                raise _AsmError("只有 DB 里能放字符串，DW / DD 放不下", line)
             raw.extend(payload.encode("utf-8"))
         else:
             value = _Expr(payload, symbols, here).parse()
-            raw.append(value & 0xFF)
-            if unit == 2:
-                raw.append((value >> 8) & 0xFF)
+            for i in range(unit):                       # 小端序，DB/DW/DD 通用
+                raw.append((value >> (8 * i)) & 0xFF)
     return raw
 
 
@@ -758,7 +787,7 @@ def _assemble(source):
                     raise _AsmError(f"标签重名：{match.group(1)}", line_no)
                 raw_labels[name] = (index, offsets[index])
                 label_names[index][offsets[index]] = match.group(1)
-            unit = 1 if match.group(2).upper() == "DB" else 2
+            unit = {"DB": 1, "DW": 2, "DD": 4}[match.group(2).upper()]
             here = offsets[index]
             elements = _expand_data(match.group(3), symbols_now(), here, line_no)
             size = _elements_size(elements, unit, line_no)
@@ -1010,7 +1039,9 @@ class _Machine:
         if kind == "sreg":
             return self.sregs[op[1]]
         if kind == "imm":
-            return op[1] & MASK16
+            # 立即数按目标位宽截断：CMP AL,-1 里那个 -1 属于 8 位操作数，应为 0xFF；
+            # 不截断就成了 0xFFFF，减法借位随之算错（CF 该 0 却给 1）
+            return op[1] & (0xFF if width == 8 else MASK16)
         if kind == "mem":
             return self.read_mem(self.address(op)[0], op[5] or width or 16)
         raise _Halt(f"仿真器读不了这个操作数：{op[0]}")
@@ -1101,7 +1132,12 @@ class _Machine:
             else:
                 product = left * right
             self.set_r16("AX", product & MASK16)
-            overflow = product != (product & 0xFF)
+            # 有符号要按符号范围判溢出：0FFH * 1 = -1 在 8 位里放得下，CF/OF 应为 0；
+            # 用无符号掩码判会把 -1 当成 0xFFFF，误报溢出
+            if signed:
+                overflow = not -128 <= product <= 127
+            else:
+                overflow = product != (product & 0xFF)
         else:
             left, right = self.regs16["AX"], source
             if signed:
@@ -1110,7 +1146,10 @@ class _Machine:
                 product = left * right
             self.regs16["AX"] = product & MASK16
             self.regs16["DX"] = (product >> 16) & MASK16
-            overflow = product != (product & MASK16)
+            if signed:
+                overflow = not -(1 << 15) <= product <= (1 << 15) - 1
+            else:
+                overflow = product != (product & MASK16)
         # 8086 上 MUL / IMUL 只保证 CF 和 OF 有意义，其余标志位是未定义的
         self.set_flag(F_CF, overflow)
         self.set_flag(F_OF, overflow)
@@ -1127,7 +1166,9 @@ class _Machine:
             else:
                 divisor = source
             quotient, remainder = _trunc_div(dividend, divisor)
-            if not -128 <= quotient <= 255:
+            # 商的合法范围随有无符号而变：IDIV 是 -128..127，DIV 是 0..255
+            lo, hi = (-128, 127) if signed else (0, 255)
+            if not lo <= quotient <= hi:
                 raise _Halt("DIV / IDIV 的商放不进 AL（8086 会触发 INT 0），程序停住了")
             self.set_r8("AL", quotient & 0xFF)
             self.set_r8("AH", remainder & 0xFF)
@@ -1139,7 +1180,8 @@ class _Machine:
             else:
                 divisor = source
             quotient, remainder = _trunc_div(dividend, divisor)
-            if not -(1 << 15) <= quotient <= 0xFFFF:
+            lo, hi = (-(1 << 15), (1 << 15) - 1) if signed else (0, MASK16)
+            if not lo <= quotient <= hi:
                 raise _Halt("DIV / IDIV 的商放不进 AX（8086 会触发 INT 0），程序停住了")
             self.regs16["AX"] = quotient & MASK16
             self.regs16["DX"] = remainder & MASK16
@@ -1186,7 +1228,11 @@ class _Machine:
                 self.set_flag(F_OF, bool(value & sign_bit))
             elif mnemonic == "SAR":
                 self.set_flag(F_OF, False)
-            else:
+            elif mnemonic == "ROR":
+                # ROR 的 OF 看结果最高两位是否不同，不能套 ROL 那套 MSB^CF
+                self.set_flag(F_OF,
+                              ((result >> (bits - 1)) & 1) != ((result >> (bits - 2)) & 1))
+            else:                                   # ROL / RCR
                 self.set_flag(F_OF, ((result >> (bits - 1)) & 1) != self.flag(F_CF))
         if mnemonic in ("SHL", "SAL", "SHR", "SAR"):
             self.set_flag(F_ZF, result == 0)
@@ -1648,6 +1694,8 @@ def asm86(source: str = "", path: str = "", cpu: str = "8086", stdin: str = "",
         return f"汇编失败：{exc}"
     except RecursionError:
         return "汇编失败：表达式嵌套得太深了"
+    except MemoryError:
+        return "汇编失败：数据定义太大，内存不够展开"
 
     memory = bytearray(MEM_SIZE)
     for index, offset, payload in program["memory_items"]:

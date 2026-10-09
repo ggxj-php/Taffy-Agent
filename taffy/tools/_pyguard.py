@@ -13,8 +13,9 @@ import sys
 # 这些事件直接禁止，不区分路径
 FORBIDDEN = (
     "os.system", "os.exec", "os.posix_spawn", "os.spawn", "os.fork", "os.forkpty",
-    "os.startfile", "subprocess.", "socket.", "urllib.", "ftplib.", "smtplib.",
-    "http.client.", "ctypes.", "winreg.", "msvcrt.", "pty.spawn", "webbrowser.",
+    "os.kill", "os.startfile", "subprocess.", "socket.", "urllib.", "ftplib.",
+    "smtplib.", "http.client.", "ctypes.", "winreg.", "msvcrt.", "pty.spawn",
+    "webbrowser.",
 )
 
 # 带路径参数的写/删类事件：路径参数必须全部落在 workspace 里
@@ -65,11 +66,18 @@ def main():
     sys.argv = sys.argv[2:]      # 让脚本看到自己的参数，跟直接 python 它一样
 
     # 只有 workspace 和解释器自身目录可以读，别的一律不行
+    project_root = os.path.dirname(workspace)      # workspace = PROJECT_ROOT/workspace
     roots = {workspace}
     for base in (sys.prefix, sys.base_prefix, sys.exec_prefix,
                  os.path.dirname(sys.executable), os.path.dirname(os.__file__)):
-        if base:
-            roots.add(os.path.normcase(os.path.realpath(base)))
+        if not base:
+            continue
+        full = os.path.normcase(os.path.realpath(base))
+        # 解释器目录若和项目根重合（venv 就装在项目里），等于把 .env / admin.json
+        # 一起送出去，这种 root 直接不要
+        if full == project_root or full.startswith(project_root + os.sep):
+            continue
+        roots.add(full)
 
     def deny(what):
         raise PermissionError(f"安全拦截：{what}。塔菲的代码只准在 workspace 里活动喵")

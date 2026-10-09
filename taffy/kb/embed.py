@@ -66,11 +66,19 @@ _PROBE_TIMEOUT = 20       # 探测是阻塞建索引的，别用一个 60 秒的
 # 只有这几个状态码才当「输入太长」。别把 4xx 一锅端：401 / 403 是 key 不对、
 # 404 是地址写错、429 是限流，当成「太长」会让块长一路缩到最小还一声不响。
 _TOO_LONG_CODES = (400, 413, 422)
-_probed = {}              # {"模型@维度@地址": (上限, 说明)}，进程内只探一遍
+_probed = {}              # {"模型@维度@地址": (上限, 说明, 探没探准)}，进程内只探一遍
 
 
 class EmbedError(RuntimeError):
     """向量化失败。调用方接住它、把向量那一路关掉就行，别让整个索引建不起来。"""
+
+
+class EmbedConfigError(EmbedError):
+    """向量配置有问题（典型：接口返回的维度和 EMBED_DIM 对不上）。
+
+    这类错重启、重试都不会好，必须去改配置。跟「限流 / 网络」那种等一等还能续跑的
+    失败分开报，免得给用户指错动作（见 kb/index.py 的 build）。
+    """
 
 
 class _TooManyItems(EmbedError):
@@ -83,11 +91,13 @@ def enabled():
 
 
 def signature():
-    """缓存用的指纹：只有「模型 + 维度」变了才需要重算向量。
+    """缓存用的指纹：模型 / 维度 / 接口地址 变了才需要重算向量。
 
-    故意不含 key 和接口地址——换个 key 不该让几万个块的向量全部作废重花钱。
+    base_url 也得算进去：同一个模型名挂在不同地址（不同服务商 / 自建）上未必是同一套
+    权重，向量不在一个空间里，混着用就是静默漏召回。key 不算——换个 key 不该让几万个
+    块的向量全部作废重花钱。
     """
-    return f"{settings.embed_model()}@{EMBED_DIM}"
+    return f"{settings.embed_model()}@{EMBED_DIM}@{settings.embed_base_url()}"
 
 
 def describe():
@@ -184,7 +194,11 @@ def _probe_once(candidate):
 
 
 def _probe():
-    """从大到小试，返回 (上限 token, 给人看的说明)。上限 0 = 不限。
+    """从大到小试，返回 (上限 token, 给人看的说明, 探没探准)。上限 0 = 不限。
+
+    第三项是给缓存指纹用的（见 kb/index.py 的 _chunk_params）：探测失败时那个 0 不是
+    真的「不限」，只是没探出来，不能拿去算指纹——否则这次记 0、下次探成功记 512，
+    缓存被判过期、整库向量白重算一遍。
 
     能一次探完就别多花请求：顶档过得去就直接收工——那是绝大多数情况（8K 窗口的模型
     到处都是，而我们的块最长才 580 token 左右）。
@@ -192,19 +206,35 @@ def _probe():
     for candidate in _PROBE_LADDER:
         status, limit = _probe_once(candidate)
         if status == "unknown":
-            return 0, "探不出来（接口没回应 / 返回看不懂），按不限处理"
+            return 0, "探不出来（接口没回应 / 返回看不懂），按不限处理", False
         if status == "ok":
             if candidate == _PROBE_TOP:
-                return 0, f"模型吃得下 {_PROBE_TOP} token 以上，现有块长不用收口"
-            return candidate, f"模型上限约 {candidate} token，块长按它收口"
+                return 0, f"模型吃得下 {_PROBE_TOP} token 以上，现有块长不用收口", True
+            return candidate, f"模型上限约 {candidate} token，块长按它收口", True
         if status == "truncated":
             if limit >= _PROBE_FLOOR:
-                return limit, f"模型上限约 {limit} token（按它自己报的用量算的），块长按它收口"
-            return 0, f"模型上限只有 {limit} token，小到没法切块了，按不限处理"
+                return limit, f"模型上限约 {limit} token（按它自己报的用量算的），块长按它收口", True
+            return 0, f"模型上限只有 {limit} token，小到没法切块了，按不限处理", True
         # too_long：这一档吃不下，往下试
     # 连最小那一档都发不出去，多半不是长度问题（key / 模型名 / 地址不对），
-    # 那就别乱缩块长，按不限处理
-    return 0, f"连 {_PROBE_LADDER[-1]} token 都发不出去，看着不像长度问题（key / 模型名 / 地址？），按不限处理"
+    # 那就别乱缩块长，按不限处理；这种也没探准，不进指纹
+    return 0, f"连 {_PROBE_LADDER[-1]} token 都发不出去，看着不像长度问题（key / 模型名 / 地址？），按不限处理", False
+
+
+def _probe_key():
+    """一个进程只探一次：按「模型 / 维度 / 地址」区分（signature 已含这三样）。"""
+    return signature()
+
+
+def _ensure_probed():
+    """没探过就探一次，结果记在进程里；探测本身绝不能把建索引搞挂。"""
+    key = _probe_key()
+    if key not in _probed:
+        try:
+            _probed[key] = _probe()
+        except Exception as exc:
+            _probed[key] = (0, f"探测出错（{type(exc).__name__}），按不限处理", False)
+    return _probed[key]
 
 
 def max_input_tokens():
@@ -215,24 +245,26 @@ def max_input_tokens():
     configured = settings.embed_max_tokens()
     if configured > 0:
         return configured
-    key = f"{signature()}@{settings.embed_base_url()}"
-    if key not in _probed:
-        try:
-            _probed[key] = _probe()
-        except Exception as exc:      # 探测本身绝不能把建索引搞挂
-            _probed[key] = (0, f"探测出错（{type(exc).__name__}），按不限处理")
-    return _probed[key][0]
+    return _ensure_probed()[0]
+
+
+def max_input_tokens_known():
+    """这次的上限可不可信。
+
+    后台填了、或者真探出来了 = 可信；探测没通 / 返回看不懂 = 不可信（那一刻的 0 只是
+    「不知道」，不能拿去算缓存指纹，见 kb/index.py 的 _chunk_params）。
+    """
+    if settings.embed_max_tokens() > 0:
+        return True
+    return bool(_ensure_probed()[2])
 
 
 def probe_note():
     """上一次探测的结论，给后台显示用。还没探过就是空串。"""
-    key = f"{signature()}@{settings.embed_base_url()}"
-    entry = _probed.get(key)
-    if entry:
-        return entry[1]
     if settings.embed_max_tokens() > 0:
         return f"按后台填的 {settings.embed_max_tokens()} token 收口（没走自动探测）"
-    return ""
+    entry = _probed.get(_probe_key())
+    return entry[1] if entry else ""
 
 
 def _retry_delay(resp, attempt):
@@ -289,7 +321,9 @@ def _post(texts):
                 vectors = [item["embedding"] for item in rows]
                 got = len(vectors[0])
                 if got != want:
-                    raise EmbedError(
+                    # 维度对不上是配置错（EMBED_DIM 没跟着模型改）：重试、重启都不会好，
+                    # 用专门的异常往外报，别混进「限流、重启会接着算」那一类里误导用户
+                    raise EmbedConfigError(
                         f"{settings.embed_model()} 返回的是 {got} 维，但 EMBED_DIM 配的是 {want} 维。"
                         f"把 EMBED_DIM 改成 {got}，或者删掉 .cache/ 重建索引"
                     )
@@ -328,6 +362,7 @@ def embed_texts(texts):
     texts = list(texts)
     if not texts:
         return []
+    start = _batch          # 进来时的批大小，砍错了要还原
     while True:
         batches = [texts[i:i + _batch] for i in range(0, len(texts), _batch)]
         try:
@@ -339,8 +374,16 @@ def embed_texts(texts):
         except _TooManyItems:
             # _post 只在多行的批次上抛这个，正常砍下去一定会收敛；留个兜底免得死循环
             if _batch <= 1:
+                _batch = start
                 raise
             _batch = max(1, _batch // 2)
+        except EmbedError:
+            # 400 未必都是「行太多」——也可能是内容 / 模型名 / key。砍小了还报同样的错，
+            # 就说明跟行数无关：把被误砍的批大小还原，别让一次内容性的 400 把整轮的
+            # 批大小永久砍到 1（一进程只砍不还原，后面每批都只发 1 条，慢得离谱）。
+            if _batch < start:
+                _batch = start
+            raise
 
 
 def embed_query(text):

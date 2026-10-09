@@ -223,7 +223,10 @@ def _simulate(inputs, nodes, dffs, given: dict, cycles: int) -> str:
     defaulted = []
     for name in inputs:
         if name in given:
-            drives[name] = _sequence(given[name], cycles, name)
+            try:
+                drives[name] = _sequence(given[name], cycles, name)
+            except ValueError as exc:
+                return f"输入有问题：{exc}"
         elif dffs:
             drives[name] = [0] * cycles
             defaulted.append(name)
@@ -234,7 +237,7 @@ def _simulate(inputs, nodes, dffs, given: dict, cycles: int) -> str:
 
     state = {name: 0 for name in dffs}
     rows = []
-    previous_clock = None
+    previous_clock = 0        # 假定时钟初始为低电平，第一拍 CLK=1 才算上升沿
     for tick in range(cycles):
         pins = {name: drives[name][tick] for name in inputs}
         env = dict(pins)

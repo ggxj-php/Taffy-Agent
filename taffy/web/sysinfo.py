@@ -7,12 +7,15 @@
 """
 import os
 import shutil
+import threading
 import time
 
 from ..config import PROJECT_ROOT
 
 # 上次的 CPU 采样。累计值相减才有意义，单看一次的数字是开机以来的平均，没参考价值。
 _last_cpu = None
+# 采样状态是模块级共享的，几个请求同时来会互相覆盖，加把锁串一串。
+_cpu_lock = threading.Lock()
 
 
 def _read(path):
@@ -48,17 +51,18 @@ def cpu_percent():
     first = _cpu_sample()
     if first is None:
         return None
-    if _last_cpu is None:
-        time.sleep(0.12)
-        second = _cpu_sample()
-        if second is None:
-            return None
-        _last_cpu, current = first, second
-    else:
-        current = first
-    idle, total = current
-    last_idle, last_total = _last_cpu
-    _last_cpu = current
+    with _cpu_lock:
+        if _last_cpu is None:
+            time.sleep(0.12)
+            second = _cpu_sample()
+            if second is None:
+                return None
+            _last_cpu, current = first, second
+        else:
+            current = first
+        idle, total = current
+        last_idle, last_total = _last_cpu
+        _last_cpu = current
     delta_total = total - last_total
     if delta_total <= 0:
         return None

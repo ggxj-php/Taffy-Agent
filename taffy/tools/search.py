@@ -615,25 +615,30 @@ def _is_local(ip) -> bool:
     return any(ip in net for net in _LOCAL_NETS)
 
 
-def _host_blocked(host: str) -> bool:
-    """本机、内网、链路本地一律不给开，免得拿塔菲当跳板去戳内部服务"""
+def _host_blocked(host: str) -> str:
+    """本机、内网、链路本地一律不给开，免得拿塔菲当跳板去戳内部服务。
+
+    返回拒绝原因；没问题的地址返回空串。解析不了的域名按「拦下」处理：如果这里
+    放行，攻击者只要让校验那次解析失败、真正连接那次解析到内网，就是典型的
+    DNS rebinding 绕过。
+    """
     if not host:
-        return True
+        return "地址里没有主机名"
     host = host.lower().strip("[]")
     if host == "localhost" or host.endswith((".local", ".internal", ".localhost")):
-        return True
+        return "指向本机"
     try:
         infos = socket.getaddrinfo(host, None)
     except OSError:
-        return False        # 解析不了就交给 requests 去报错，这里不拦
+        return "这个域名解析不了"
     for info in infos:
         try:
             ip = ipaddress.ip_address(info[4][0])
         except ValueError:
             continue
         if _is_local(ip):
-            return True
-    return False
+            return "解析到了本机或者内网地址"
+    return ""
 
 
 def _check_url(url: str):
@@ -641,8 +646,9 @@ def _check_url(url: str):
     parsed = urlsplit(url)
     if parsed.scheme.lower() not in ("http", "https"):
         return f"只认 http / https 的链接喵，{parsed.scheme or '这种'}开头的不给开"
-    if _host_blocked(parsed.hostname):
-        return "这个地址指向本机或者内网，塔菲不给开喵"
+    reason = _host_blocked(parsed.hostname)
+    if reason:
+        return f"这个地址塔菲不给开（{reason}）喵"
     return None
 
 

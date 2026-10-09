@@ -1,6 +1,6 @@
 """小型 CPU 模拟器：一套精简的 16 位指令集，跑汇编看寄存器和内存怎么变。
 
-给计算机组成原理 / 单片机教学用：寄存器 R0~R7，标志位 Z/N/C，内存 256 个字，
+给计算机组成原理 / 单片机教学用：寄存器 R0~R7，标志位 Z/N/C/V，内存 256 个字，
 指令和数据共用这块内存，数值一律按 16 位回绕（超过 0xFFFF 就绕回来）。
 纯标准库实现，不联网、不起子进程，跨平台。
 
@@ -28,15 +28,15 @@ SPECS = [
                 "在自带的小型 16 位 CPU 模拟器上跑一段汇编，返回执行步数、寄存器、标志位和"
                 "改过的内存，trace=true 时还给逐步执行过程。讲计算机组成、指令周期、"
                 "寄存器/内存/标志位怎么动的时候用这个，比嘴上讲清楚。"
-                "硬件模型：寄存器 R0~R7，标志位 Z/N/C，内存 256 个字（指令和数据共用），"
+                "硬件模型：寄存器 R0~R7，标志位 Z/N/C/V，内存 256 个字（指令和数据共用），"
                 "所有数值按 16 位回绕。"
                 "指令集：LI Rd,imm 立即数；MOV Rd,Rs；LOAD Rd,addr 读内存；STORE Rs,addr 写内存；"
                 "ADD/SUB/MUL/AND/OR/XOR Rd,Ra,Rb；ADDI/SUBI Rd,Ra,imm；NOT Rd,Ra；"
-                "SHL/SHR Rd,Ra,imm；INC/DEC Rd；CMP Ra,Rb（更新 Z/N/C）；"
+                "SHL/SHR Rd,Ra,imm；INC/DEC Rd；CMP Ra,Rb（更新 Z/N/C/V）；"
                 "JMP/JZ/JNZ/JC/JNC/JGT/JLT 标签；HALT；NOP。"
                 "数据用 DW 1,2,3 和 DS 4（预留 4 个零字）。"
                 "写法：一行一条，';' 或 '#' 后是注释，'loop:' 定义标签，数支持十进制和 0x/0b/0o 前缀，"
-                "负数按 16 位补码存。算术指令会更新 Z/N/C。"
+                "负数按 16 位补码存。算术指令会更新 Z/N/C/V（JGT/JLT 按有符号比较看 N 和 V）。"
             ),
             "parameters": {
                 "type": "object",
@@ -68,7 +68,7 @@ SPECS = [
 _ARITY = {
     "HALT": 0, "NOP": 0,
     "LI": 2, "MOV": 2, "LOAD": 2, "STORE": 2, "NOT": 2,
-    "SHL": 2, "SHR": 2, "INC": 1, "DEC": 1, "CMP": 2,
+    "SHL": 3, "SHR": 3, "INC": 1, "DEC": 1, "CMP": 2,
     "ADD": 3, "SUB": 3, "MUL": 3, "AND": 3, "OR": 3, "XOR": 3,
     "ADDI": 3, "SUBI": 3,
     "JMP": 1, "JZ": 1, "JNZ": 1, "JC": 1, "JNC": 1, "JGT": 1, "JLT": 1,
@@ -300,6 +300,13 @@ def _step(cell, regs, flags, memory, pc):
             result, flags["C"] = left | right, 0
         else:
             result, flags["C"] = left ^ right, 0
+        # V 是有符号溢出：加法看两操作数同号而结果变号，减法看两操作数异号而结果变号
+        if op == "ADD":
+            flags["V"] = 1 if (left ^ result) & (right ^ result) & 0x8000 else 0
+        elif op == "SUB":
+            flags["V"] = 1 if (left ^ right) & (left ^ result) & 0x8000 else 0
+        else:
+            flags["V"] = 0
         regs[cell[1]] = result
         flags["Z"] = 1 if result == 0 else 0
         flags["N"] = 1 if result & 0x8000 else 0
@@ -312,6 +319,10 @@ def _step(cell, regs, flags, memory, pc):
         else:
             diff = left - imm
             result, flags["C"] = diff & MASK, 1 if diff < 0 else 0
+        if op == "ADDI":
+            flags["V"] = 1 if (left ^ result) & (imm ^ result) & 0x8000 else 0
+        else:
+            flags["V"] = 1 if (left ^ imm) & (left ^ result) & 0x8000 else 0
         regs[cell[1]] = result
         flags["Z"] = 1 if result == 0 else 0
         flags["N"] = 1 if result & 0x8000 else 0
@@ -320,6 +331,7 @@ def _step(cell, regs, flags, memory, pc):
         result = (~regs[cell[2]]) & MASK
         regs[cell[1]] = result
         flags["C"] = 0
+        flags["V"] = 0
         flags["Z"] = 1 if result == 0 else 0
         flags["N"] = 1 if result & 0x8000 else 0
         return nxt
@@ -332,6 +344,7 @@ def _step(cell, regs, flags, memory, pc):
             flags["C"] = 1 if count and (value >> (count - 1)) & 1 else 0
             result = (value >> count) & MASK
         regs[cell[1]] = result
+        flags["V"] = 0
         flags["Z"] = 1 if result == 0 else 0
         flags["N"] = 1 if result & 0x8000 else 0
         return nxt
@@ -341,6 +354,8 @@ def _step(cell, regs, flags, memory, pc):
         result = total & MASK
         regs[cell[1]] = result
         flags["C"] = 1 if (total > MASK or total < 0) else 0
+        # INC 从 0x7FFF 翻到 0x8000、DEC 从 0x8000 翻到 0x7FFF 就是有符号溢出
+        flags["V"] = 1 if result == (0x8000 if op == "INC" else 0x7FFF) else 0
         flags["Z"] = 1 if result == 0 else 0
         flags["N"] = 1 if result & 0x8000 else 0
         return nxt
@@ -350,6 +365,7 @@ def _step(cell, regs, flags, memory, pc):
         flags["Z"] = 1 if diff == 0 else 0
         flags["N"] = 1 if diff & 0x8000 else 0
         flags["C"] = 1 if left < right else 0
+        flags["V"] = 1 if (left ^ right) & (left ^ diff) & 0x8000 else 0
         return nxt
 
     # 跳转
@@ -364,9 +380,9 @@ def _step(cell, regs, flags, memory, pc):
     if op == "JNC":
         return cell[1] if not flags["C"] else nxt
     if op == "JGT":
-        return cell[1] if (not flags["Z"] and not flags["N"]) else nxt
+        return cell[1] if (not flags["Z"] and flags["N"] == flags["V"]) else nxt
     if op == "JLT":
-        return cell[1] if flags["N"] else nxt
+        return cell[1] if flags["N"] != flags["V"] else nxt
     raise ValueError(f"模拟器不认识这条指令：{op}")
 
 
@@ -413,7 +429,7 @@ def asm_sim(source: str = "", path: str = "", max_steps: int = DEFAULT_MAX_STEPS
         label_of.setdefault(addr, []).append(name)
 
     regs = [0] * REG_COUNT
-    flags = {"Z": 0, "N": 0, "C": 0}
+    flags = {"Z": 0, "N": 0, "C": 0, "V": 0}
     pc = 0
     steps = 0
     trace_lines = []
@@ -453,7 +469,7 @@ def asm_sim(source: str = "", path: str = "", max_steps: int = DEFAULT_MAX_STEPS
 
     lines = [f"程序：{instructions} 条指令，{len(data)} 个字数据",
              f"停机：{stopped}（共执行 {steps} 步）",
-             f"标志位：Z={flags['Z']} N={flags['N']} C={flags['C']}",
+             f"标志位：Z={flags['Z']} N={flags['N']} C={flags['C']} V={flags['V']}",
              "寄存器：", _reg_line(regs)]
 
     touched = [addr for addr in range(MEM_SIZE)

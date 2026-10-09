@@ -180,8 +180,12 @@ def _power(base, exp, prec: int):
         _guard_digits(exp * _digits_of(abs(base)))
         return base ** exp
     b, e = _dec(base), _dec(exp)
+    if e.is_zero():
+        return Decimal(1)               # 任何数的 0 次方都是 1（0**0 也算 1）
     if b.is_zero():
-        raise ValueError("0 不能当底数算 0 次方或负数次方")
+        if e < 0:
+            raise ValueError("0 不能算负次方（相当于除以 0）")
+        return Decimal(0)               # 0 的正次方还是 0
     if b < 0 and e != e.to_integral_value():
         raise ValueError("负数的非整数次方在实数里没有结果")
     try:
@@ -226,8 +230,18 @@ def _fn_cbrt(values, prec):
     x = _dec(values[0])
     if x.is_zero():
         return Decimal(0)
-    root = (abs(x) ** (Decimal(1) / 3))
-    return -root if x < 0 else +root
+    target = abs(x)
+    with localcontext() as ctx:
+        ctx.prec = prec + 10
+        root = target ** (Decimal(1) / 3)     # 粗略初值（1/3 本身有误差）
+        for _ in range(4):                    # 牛顿迭代把精度补满
+            root = (2 * root + target / (root * root)) / 3
+        root = +root
+    # 完全立方数就直接给整数，免得 8 开出来是 2.000…0
+    nearest = root.to_integral_value(rounding=decimal.ROUND_HALF_EVEN)
+    if nearest != 0 and nearest * nearest * nearest == target:
+        return -nearest if x < 0 else +nearest
+    return -root if x < 0 else root
 
 
 def _fn_exp(values, prec):
@@ -405,8 +419,18 @@ def _fn_round(values, prec):
     if not -prec * 2 <= digits <= prec * 2:
         raise ValueError("round 要保留的位数太夸张了")
     if isinstance(x, int):
-        return x if digits >= 0 else int(round(x, digits))
-    return round(x, digits)
+        if digits >= 0:
+            return x
+        factor = 10 ** (-digits)
+        quotient, remainder = divmod(abs(x), factor)
+        if 2 * remainder >= factor:          # 四舍五入（不是 Python 默认的半偶舍入）
+            quotient += 1
+        return (quotient if x >= 0 else -quotient) * factor
+    with localcontext() as ctx:
+        ctx.prec = prec + 10
+        rounded = _dec(x).quantize(Decimal(1).scaleb(-digits),
+                                   rounding=decimal.ROUND_HALF_UP)
+    return int(rounded) if digits <= 0 else +rounded
 
 
 def _fn_min(values, prec):
@@ -475,16 +499,24 @@ def _fn_lcm(values, prec):
 def _fn_comb(values, prec):
     _arity("comb", values, 2)
     n, k = _need_int("comb", values[0]), _need_int("comb", values[1])
-    if n > 0:
-        _guard_digits(n * math.log10(n / math.e) + 1)
+    if n < 0 or k < 0:
+        raise ValueError("comb 的两个参数都不能是负数")
+    if k <= n:
+        # 直接估 C(n,k) 的位数，别拿 n! 的位数去估（那个会大出好几个数量级）
+        digits = (math.lgamma(n + 1) - math.lgamma(k + 1)
+                  - math.lgamma(n - k + 1)) / math.log(10)
+        _guard_digits(digits)
     return math.comb(n, k)
 
 
 def _fn_perm(values, prec):
     _arity("perm", values, 2)
     n, k = _need_int("perm", values[0]), _need_int("perm", values[1])
-    if n > 0:
-        _guard_digits(n * math.log10(n / math.e) + 1)
+    if n < 0 or k < 0:
+        raise ValueError("perm 的两个参数都不能是负数")
+    if k <= n:
+        digits = (math.lgamma(n + 1) - math.lgamma(n - k + 1)) / math.log(10)
+        _guard_digits(digits)
     return math.perm(n, k)
 
 

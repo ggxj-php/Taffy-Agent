@@ -12,17 +12,30 @@ from ..config import KB_TOP_K
 from .index import KnowledgeBase
 
 _kb = None
-_lock = threading.Lock()
+_lock = threading.Lock()          # 护 _stats 用
+_lock_build = threading.Lock()    # 护「建库」用，跟 _lock 分开，别把建库的长时间持锁拖累 stats
 # 后台页面拿它显示索引进度：还在建吗、向量算了多少、有没有出错、块按多长收口
 _stats = {"building": False, "chunks": 0, "vectors": 0, "error": "",
           "max_tokens": 0, "embed_note": ""}
 
 
 def _get():
+    """懒加载索引单例。
+
+    两个线程同时第一次用到知识库时，不加锁会各建一次库（双份向量钱 + 双份内存）；
+    而且必须等 build() 完整跑完才发布 _kb，否则别的线程会拿到「词索引还没组装」的
+    半成品，把「正在建索引」显示成「知识库是空的」。所以这里用双检锁，并且只在建完
+    之后才把 _kb 对外可见。
+    """
     global _kb
-    if _kb is None:
-        _kb = KnowledgeBase()
-        _kb.build()
+    kb = _kb
+    if kb is not None:
+        return kb
+    with _lock_build:
+        if _kb is None:
+            kb = KnowledgeBase()
+            kb.build()          # 构建期间 _kb 仍是 None，别的线程进不来
+            _kb = kb            # 只在建完之后才发布
     return _kb
 
 
@@ -58,6 +71,10 @@ def stats():
     kb = _kb
     if kb is not None:
         data["progress"] = kb.progress_snapshot()
+        # 检索时才暴露的向量故障（_rank_vector 现写进 kb.vector_error）也得能到后台：
+        # warmup 建好之后的那一问才出的问题，不在这刷新就永远看不到。
+        if kb.vector_error:
+            data["error"] = kb.vector_error
     return data
 
 

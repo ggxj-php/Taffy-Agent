@@ -150,8 +150,12 @@ function demath(text) {
 
 /* ---------------- Markdown / 代码高亮 ---------------- */
 
+/* 模型正文可能被知识库/网页内容带偏，DOMPurify 默认白名单放行 <style> 和
+   style 属性，能被拿来塞钓鱼覆盖层，这里一律禁掉。 */
+const SANITIZE_CONFIG = { FORBID_TAGS: ['style'], FORBID_ATTR: ['style'] };
+
 function renderMarkdown(text) {
-  return DOMPurify.sanitize(marked.parse(demath(text)));
+  return DOMPurify.sanitize(marked.parse(demath(text)), SANITIZE_CONFIG);
 }
 
 /* 复制文本。手机连局域网 IP 打开时是 http 页面，不是安全上下文，
@@ -228,16 +232,21 @@ function enhance(root) {
   });
 }
 
-/* 流式下每个增量都重渲染整块，用 rAF 压一下频率，别把帧率拖垮 */
+/* 流式下每个增量都重渲染整块，用 rAF 压一下频率，别把帧率拖垮。
+   长代码块下每帧对整个 raw 重跑 marked+hljs 是 O(n²)，再加一道时间闸：
+   两次渲染之间至少隔 RENDER_MIN_MS，期间的增量合并进这一帧（读的是最新 raw），
+   收尾时 send() 会再排一次，最后的内容不会漏画。 */
+const RENDER_MIN_MS = 80;
+
 function scheduleRender(block) {
   if (block.pending) return;
   block.pending = true;
-  requestAnimationFrame(() => {
+  setTimeout(() => requestAnimationFrame(() => {
     block.pending = false;
     block.el.innerHTML = renderMarkdown(block.raw);
     enhance(block.el);
     updateToBottom();
-  });
+  }), RENDER_MIN_MS);
 }
 
 /* ---------------- 滚动 ---------------- */
@@ -294,7 +303,7 @@ function addAgent() {
   row.append(avatar, bubble);
   messagesEl.appendChild(row);
   scrollToBottom();
-  return { row, bubble, thinking: null, content: null, tools: {} };
+  return { row, bubble, thinking: null, content: null, tools: [] };
 }
 
 function thinkingChunk(turn, text) {
@@ -360,13 +369,17 @@ function toolStart(turn, name, args) {
 
   card.append(summary, body);
   turn.bubble.appendChild(card);
-  turn.tools[name] = card;
+  // 按出现顺序存：一轮里同名工具可能调两次，用 name 当 key 后面那张会把前面顶掉
+  turn.tools.push({ name, card, done: false });
   updateToBottom();
 }
 
 function toolEnd(turn, name, result) {
-  const card = turn.tools[name];
-  if (!card) return;
+  // 找同名里还没收尾的那张（先出现的先收尾），别让后一张顶掉前一张
+  const entry = turn.tools.find((t) => t.name === name && !t.done);
+  if (!entry) return;
+  entry.done = true;
+  const card = entry.card;
   card.querySelector('.tool-result').textContent = result;
   const state = card.querySelector('.tstate');
   state.textContent = '完成';
@@ -450,12 +463,16 @@ function paintContext(info) {
 }
 
 async function refreshContext() {
+  const asked = sessionId || '';   // 记下这次问的是哪个会话，回填前核对还在不在
   try {
     const resp = await fetch(
-      `/api/context?session_id=${encodeURIComponent(sessionId || '')}`,
+      `/api/context?session_id=${encodeURIComponent(asked)}`,
       { cache: 'no-store' },
     );
-    if (resp.ok) paintContext(await resp.json());
+    if (!resp.ok) return;
+    const info = await resp.json();
+    // 切了会话的话，旧会话的用量不能画到新会话上，否则百分比误导压缩判断
+    if (asked === (sessionId || '')) paintContext(info);
   } catch (err) {
     /* 拿不到就先不显示，下一轮再说 */
   }
@@ -484,6 +501,9 @@ async function streamChat(id, message, onEvent, image) {
     }, STREAM_IDLE_MS);
   };
 
+  // 看门狗在 fetch 之前就挂上：响应头回来之前（后端还卡在 LLM 调用）也要能超时，
+  // 否则 fetch 一直挂着，busy 永远为 true、发送键锁死，只能刷新页面。
+  keepAlive();
   try {
     const resp = await fetch('/api/chat', {
       method: 'POST',
@@ -517,11 +537,13 @@ async function streamChat(id, message, onEvent, image) {
           done_events = true;
           continue;
         }
+        let event;
         try {
-          onEvent(JSON.parse(payload));
+          event = JSON.parse(payload);
         } catch (err) {
-          /* 半截 JSON，忽略 */
+          continue;   // 半截 JSON，忽略
         }
+        onEvent(event);   // 渲染异常让它冒出去，别再当成半截 JSON 一起吞掉
       }
     }
   } catch (err) {

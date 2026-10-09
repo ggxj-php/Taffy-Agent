@@ -120,44 +120,68 @@ def remove(name):
     return os.path.basename(full)
 
 
+def _discard(path):
+    """回滚时删文件，删不掉就算了——不能让清理本身再抛异常。"""
+    try:
+        os.remove(path)
+    except OSError:
+        pass
+
+
 def import_zip(path):
     """把压缩包里的图片收进库里。
 
     返回 {"added": [...], "skipped": [(文件名, 原因), ...]}。认不出来的不报错，
     一条条列给主人看——批量导入时最怕的就是「不知道哪几张没进去」。
+
+    整包中途坏掉（坏 zip、读到一半 CRC 错、写盘失败）时，把本次已经写进去的连同
+    那张半截文件一起删掉，干干净净地失败——不然调用方只会翻成一句「解不开」，
+    库里却已经悄悄多了几张废图。
     """
     added, skipped = [], []
+    written = []                      # 本次已成功落盘的文件全路径，出错时用来回滚
     total_bytes = 0
-    with zipfile.ZipFile(path) as zf:
-        for info in zf.infolist():
-            raw = info.filename.replace("\\", "/")
-            base = os.path.basename(raw)
-            if info.is_dir() or not base or base.startswith("."):
-                continue
-            if base.startswith("__MACOSX") or raw.startswith("__MACOSX"):
-                continue
-            if len(added) >= MAX_IMPORT_FILES:
-                skipped.append((base, f"一次最多导 {MAX_IMPORT_FILES} 张"))
-                break
-            if info.file_size > MAX_FILE_BYTES:
-                skipped.append((base, f"超过 {MAX_FILE_BYTES // 1024 // 1024}MB"))
-                continue
-            total_bytes += info.file_size
-            if total_bytes > MAX_IMPORT_BYTES:
-                skipped.append((base, "解压后总量太大，剩下的没导"))
-                break
-            try:
-                check_name(base)
-            except ValueError as exc:
-                skipped.append((base, str(exc)))
-                continue
-            target = free_path(base)
-            # 一张一张读、一张一张写：单张已经限过 8MB，不会把整个包读进内存
-            with zf.open(info) as src, open(target, "wb") as dst:
-                while True:
-                    chunk = src.read(64 * 1024)
-                    if not chunk:
-                        break
-                    dst.write(chunk)
-            added.append(os.path.basename(target))
+    try:
+        with zipfile.ZipFile(path) as zf:
+            for info in zf.infolist():
+                raw = info.filename.replace("\\", "/")
+                base = os.path.basename(raw)
+                if info.is_dir() or not base or base.startswith("."):
+                    continue
+                if base.startswith("__MACOSX") or raw.startswith("__MACOSX"):
+                    continue
+                if len(added) >= MAX_IMPORT_FILES:
+                    skipped.append((base, f"一次最多导 {MAX_IMPORT_FILES} 张"))
+                    break
+                if info.file_size > MAX_FILE_BYTES:
+                    skipped.append((base, f"超过 {MAX_FILE_BYTES // 1024 // 1024}MB"))
+                    continue
+                total_bytes += info.file_size
+                if total_bytes > MAX_IMPORT_BYTES:
+                    skipped.append((base, "解压后总量太大，剩下的没导"))
+                    break
+                try:
+                    check_name(base)
+                except ValueError as exc:
+                    skipped.append((base, str(exc)))
+                    continue
+                target = free_path(base)
+                # 一张一张读、一张一张写：单张已经限过 8MB，不会把整个包读进内存
+                try:
+                    with zf.open(info) as src, open(target, "wb") as dst:
+                        while True:
+                            chunk = src.read(64 * 1024)
+                            if not chunk:
+                                break
+                            dst.write(chunk)
+                except BaseException:
+                    _discard(target)      # 写到一半 / 读坏了：这半截别留着
+                    raise
+                written.append(target)
+                added.append(os.path.basename(target))
+    except BaseException:
+        # 中途失败：把本次已经写进去的都删掉，当作什么都没发生（调用方会翻成 400）
+        for full in written:
+            _discard(full)
+        raise
     return {"added": added, "skipped": skipped}

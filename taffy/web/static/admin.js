@@ -615,6 +615,7 @@ async function loadStickers() {
 }
 
 async function deleteSticker(name) {
+  if (!confirm(`确定把表情包 ${name} 删掉喵？删了就找不回来了。`)) return;
   try {
     const data = await api('/api/admin/stickers/delete', { name });
     renderStickers(data.library);
@@ -782,8 +783,12 @@ async function uploadWorkspace() {
 /* ---------------- 知识库文档 ---------------- */
 
 /* 知识库改完会自动重启服务（索引是进程内建的），重启时这个页面会断线。
-   所以等 /api/ping 重新通了自己刷一下，主人不用手动刷新。 */
+   所以等 /api/ping 重新通了自己刷一下，主人不用手动刷新。
+   定时器存起来：重新进来先掐掉上一串，免得叠出多条轮询链。 */
+let relaxTimer = null;
+
 function relaxAfterRestart() {
+  clearTimeout(relaxTimer);
   const started = Date.now();
   const tick = async () => {
     if (Date.now() - started > 90000) return;   // 一分半还没回来就不等了
@@ -796,9 +801,9 @@ function relaxAfterRestart() {
     } catch (err) {
       /* 还在重启，接着等 */
     }
-    setTimeout(tick, 3000);
+    relaxTimer = setTimeout(tick, 3000);
   };
-  setTimeout(tick, 9000);
+  relaxTimer = setTimeout(tick, 9000);
 }
 
 function knRow(item) {
@@ -958,7 +963,11 @@ function initUpdate() {
 
 function renderUpdate(data, applied) {
   updateInfo = data;
-  updateApplyEl.disabled = data.error ? true : Boolean(data.up_to_date);
+  // 按钮的可用状态只由「检查更新」的fresh结果决定：应用结果不在这里改，
+  // 否则会拿旧的 updateInfo 把刚拉过的按钮又点亮 → 可重复触发 git pull + 重启。
+  if (!applied) {
+    updateApplyEl.disabled = data.error ? true : Boolean(data.up_to_date);
+  }
 
   const lines = [];
   if (data.error) {
@@ -1020,10 +1029,14 @@ async function applyUpdate() {
       setTimeout(() => {
         location.reload();
       }, 6000);
+    } else if (!data.ok) {
+      // 没成功也没重启：放出来让主人重新「检查更新」后再试，别永久禁用
+      updateApplyEl.disabled = false;
     }
   } catch (err) {
     if (err.status === 401) showLogin(err.message);
     else updateResultEl.innerHTML = `<div class="bad-line">${escapeHtml(err.message)}</div>`;
+    updateApplyEl.disabled = false;   // 出错也放出来，允许重新检查后再试
   }
 }
 

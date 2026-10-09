@@ -14,6 +14,7 @@
 
 压缩失败（网络挂了、模型抽风）就当没压过，原样放行——绝不能因为压缩把聊天搞挂。
 """
+import re
 import threading
 
 from . import llm, settings
@@ -44,20 +45,18 @@ SUMMARY_SYSTEM = """你在帮一个中文聊天机器人整理对话历史。下
 - 只输出摘要本身，不要加「摘要：」这类前缀。"""
 
 
+_CJK_RE = re.compile("[\u3040-\u30ff\u3400-\u9fff\uac00-\ud7af]")
+
+
 def text_tokens(text):
     """按「中文 1 字 1 token、其它 4 字符 1 token」估。
 
     知识库那边也用它：按向量模型的输入上限反推「一块能有多少字」时，
     用的就是同一个估法——宁可估多，也不能让块超了模型的限度被截断。
     """
-    cjk = 0
-    other = 0
-    for char in text:
-        if "\u3040" <= char <= "\u30ff" or "\u3400" <= char <= "\u9fff" \
-                or "\uac00" <= char <= "\ud7af":
-            cjk += 1
-        else:
-            other += 1
+    # 用正则把 CJK 全替掉、量剩下的长度，比逐字符的 Python 循环快得多（估算要频繁调用）
+    other = len(_CJK_RE.sub("", text))
+    cjk = len(text) - other
     return cjk + (other + 3) // 4
 
 

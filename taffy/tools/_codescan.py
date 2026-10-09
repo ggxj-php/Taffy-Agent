@@ -13,6 +13,29 @@ import re
 
 # ---------- 源码预处理 ----------
 
+# C++ 原始字符串：R"(...)"、R"delim(...)delim"，前面还可能有 u8 / u / U / L 前缀。
+# 不认它的话，内容里随便一个引号就会把后面的代码「涂白」或「当注释」，规则就瞎了。
+_RAW_OPEN = re.compile(r'(?:u8|[uUL])?R"')
+
+
+def _raw_span(text, i):
+    """text[i:] 是 C++ 原始字符串的话，返回 (整体结束下标, 内容起点, 内容终点, 定界符)，否则 None"""
+    m = _RAW_OPEN.match(text, i)
+    if not m:
+        return None
+    j = m.end()                       # 定界符起点
+    k = text.find("(", j)
+    if k == -1:
+        return None
+    delim = text[j:k]
+    if any(ch in " ()\\\t\r\n" for ch in delim):
+        return None
+    close = ")" + delim + '"'
+    e = text.find(close, k + 1)
+    if e == -1:                       # 没闭合就吃到结尾，免得后面的代码被误判
+        return (len(text), k + 1, len(text), delim)
+    return (e + len(close), k + 1, e, delim)
+
 
 def _strip_comments(text):
     """去掉 // 和 /* */ 注释，注释改成等长空白，字符串原样保留。"""
@@ -20,6 +43,12 @@ def _strip_comments(text):
     i, n = 0, len(text)
     while i < n:
         c = text[i]
+        if c == "R" or c in "uUL":
+            span = _raw_span(text, i)
+            if span:                      # 原始字符串原样保留，别去猜里面的引号
+                out.append(text[i:span[0]])
+                i = span[0]
+                continue
         if c in "\"'`":
             quote = c
             out.append(c)
@@ -65,6 +94,15 @@ def _blank_strings(text):
     i, n = 0, len(text)
     while i < n:
         c = text[i]
+        if c == "R" or c in "uUL":
+            span = _raw_span(text, i)
+            if span:                      # 原始字符串内容涂白，保留 R"delim( )delim" 外框
+                end, bg, en, _d = span
+                out.append(text[i:bg])
+                out.append(" " * max(0, en - bg))
+                out.append(text[en:end])
+                i = end
+                continue
         if c in "\"'`":
             quote = c
             i += 1
@@ -118,6 +156,7 @@ _C_FUNCS = re.compile(
     r"""system|_wsystem|popen|_popen|"""
     r"""execl|execle|execlp|execlpe|execv|execve|execvp|execvpe|fork|"""
     r"""unlink|_unlink|rmdir|_rmdir|_chdir|chmod|_chmod|"""
+    r"""open|_open|_wopen|creat|_creat|rename|_wrename|"""
     r"""WinExec|ShellExecute|CreateProcess|TerminateProcess|OpenProcess|"""
     r"""WriteProcessMemory|ReadProcessMemory|CreateRemoteThread|VirtualAllocEx|"""
     r"""DeleteFile|RemoveDirectory|MoveFileEx|CopyFile|SetFileAttributes|"""
@@ -130,11 +169,24 @@ _C_FUNCS = re.compile(
 
 _C_ASM = re.compile(r"\b(__asm__|__asm|asm)\b\s*(volatile\s*)?[\({]")
 
+# 引号形式的 #include 会从本地拉进一个「没被审查」的文件，直接不放行
+_C_LOCAL_INCLUDE = re.compile(r"""#\s*include\s*["']""")
+
+# 文件流 / 文件句柄类型不以「函数调用」的形式出现（如 ifstream fin("a")），
+# 按裸标识符认，塞进只看 name( 的 _C_FUNCS 是抓不到的。
+_C_FILEIO = re.compile(
+    r"\b(?:fopen|freopen|fdopen|_wfopen|_wfreopen|tmpfile|"
+    r"ifstream|ofstream|fstream|CreateFileA|CreateFileW|CreateFile)\b",
+    re.I,
+)
+
 _C_RULES = (
     # 头文件要连着字符串一起看，因为 #include "windows.h" 的引号里就是模块名
     (_C_HEADERS, "用到了能直接操作系统的头文件", "stripped"),
+    (_C_LOCAL_INCLUDE, "用了本地 #include（会拉进没被审查的文件）", "stripped"),
     (_C_ASM, "用了内联汇编", "code"),
     (_C_FUNCS, "调用了能起进程 / 删文件 / 联网 / 改系统的函数", "code"),
+    (_C_FILEIO, "用了文件读写", "code"),
 )
 
 
@@ -160,6 +212,10 @@ _JAVA_RULES = (
     (re.compile(r"\b(ScriptEngineManager|Unsafe)\b"), "脚本引擎 / Unsafe 能绕过限制", "code"),
     (re.compile(r"\bSystem\s*\.\s*(load|loadLibrary|setSecurityManager)\s*\("),
      "能加载原生库或关掉安全限制", "code"),
+    # 反射能把类名/方法名写成字符串，绕开上面这些「按名字认」的规则
+    (re.compile(r"\bClass\s*\.\s*forName\s*\("), "反射加载类能绕过规则表", "code"),
+    (re.compile(r"\bjava\s*\.\s*lang\s*\.\s*reflect\b|\bMethodHandles?\b|"
+                r"\bgetDeclaredMethod\b|\bgetDeclaredConstructor\b"), "反射能绕过规则表", "code"),
 )
 
 

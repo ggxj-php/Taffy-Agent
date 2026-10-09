@@ -4,15 +4,18 @@
 所有输入都是直接传字符串，不用先在 workspace 里落一个文件。
 """
 import difflib
-import itertools
 import json
+import os
 import re
+import subprocess
+import sys
 
 MAX_TEXT = 100000        # 单个入参最多这么长
 MAX_PATTERN = 500
 MAX_MATCHES = 200
 MAX_OUTPUT = 6000        # 结果输出最多这么多字符
 MAX_LINES = 4000
+REGEX_TIMEOUT = 3.0      # 正则匹配的硬超时（秒），过了就杀子进程
 
 _FLAGS = {"i": re.I, "m": re.M, "s": re.S, "x": re.X, "a": re.A, "u": re.U}
 
@@ -98,8 +101,8 @@ def _visible(text: str, limit: int = 200) -> str:
 # ---------------- regex_test ----------------
 
 def _risky_pattern(pattern: str) -> bool:
-    """抓 (a+)+ / (.*)* 这种嵌套量词。re 模块没法设超时，只能先拦下来，
-    否则一个恶意 / 写错的正则能把整个服务卡死。"""
+    """抓 (a+)+ / (.*)* 这种嵌套量词。这只是个「先拦一道」的粗筛，真正保命的是
+    _run_regex 的超时——粗筛有洞（(a|aa)+ 之类也危险），别把它当唯一防线。"""
     spans = []
     stack = []
     escaped = in_class = False
@@ -124,9 +127,53 @@ def _risky_pattern(pattern: str) -> bool:
     return False
 
 
-def regex_test(pattern: str = "", text: str = "", flags: str = "", replace: str = "",
+_REGEX_WORKER = r"""
+import json, re, sys
+job = json.loads(sys.stdin.read())
+compiled = re.compile(job["pattern"], job["flags"])
+matches = []
+for m in compiled.finditer(job["text"]):
+    matches.append([m.start(), m.end(), m.group(0), list(m.groups())])
+    if len(matches) >= job["limit"]:
+        break
+out = {"matches": matches}
+if job["replace"] is not None:
+    out["replaced"] = compiled.sub(job["replace"], job["text"])
+sys.stdout.write(json.dumps(out))
+"""
+
+
+def _run_regex(pattern, flags, text, limit, replace):
+    """把匹配丢进子进程跑，超时直接杀掉。
+
+    re 模块没法设超时，留在主进程里一个灾难性回溯的正则就能把整个服务卡死，
+    只能靠子进程兜底。返回 (matches, replaced) 或 None（超时 / 子进程异常）。
+    """
+    job = json.dumps({
+        "pattern": pattern, "flags": flags, "text": text,
+        "limit": limit, "replace": replace,
+    })
+    env = dict(os.environ, PYTHONIOENCODING="utf-8", PYTHONUTF8="1")
+    try:
+        proc = subprocess.run(
+            [sys.executable, "-c", _REGEX_WORKER],
+            input=job.encode("utf-8"), stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL, timeout=REGEX_TIMEOUT, env=env,
+        )
+    except (subprocess.TimeoutExpired, OSError):
+        return None
+    if proc.returncode != 0:
+        return None
+    try:
+        out = json.loads(proc.stdout.decode("utf-8"))
+    except (ValueError, UnicodeDecodeError):
+        return None
+    return out["matches"], out.get("replaced")
+
+
+def regex_test(pattern: str = "", text: str = "", flags: str = "", replace: str = None,
                max_matches: int = MAX_MATCHES) -> str:
-    """跑一遍正则，把匹配 / 分组 / 替换结果列出来。"""
+    """跑一遍正则，把匹配 / 分组 / 替换结果列出来。replace 传空串表示「删掉匹配」。"""
     if not pattern:
         return "得先给我一个正则表达式呀喵"
     if len(pattern) > MAX_PATTERN:
@@ -144,39 +191,40 @@ def regex_test(pattern: str = "", text: str = "", flags: str = "", replace: str 
             return f"不认识的 flags：{ch}（能用的只有 i m s x a u）"
         flag_value |= _FLAGS[ch]
     try:
-        compiled = re.compile(pattern, flag_value)
-    except re.error as e:
+        compiled = re.compile(pattern, flag_value)     # 只编译，不回溯，安全
+    except (re.error, ValueError) as e:                # a 和 u 不能同时开，会抛 ValueError
         return f"这个正则写错了：{e}"
     if _risky_pattern(pattern):
         return ("这个正则里有嵌套量词（像 (a+)+ 这种写法），跑起来可能会指数级回溯卡死，"
                 "先改写成不会灾难性回溯的版本再来喵")
 
-    try:
-        matches = list(itertools.islice(compiled.finditer(text), limit))
-        lines = [
-            f"正则：{pattern}",
-            f"文本：{len(text)} 字符" + (f"，flags={flags.strip()}" if flags.strip() else ""),
-        ]
-        if not matches:
-            lines.append("一处都没匹配上")
+    result = _run_regex(pattern, flag_value, text, limit, replace)
+    if result is None:
+        return (f"这个正则跑了超过 {REGEX_TIMEOUT:.0f} 秒还没算完，八成会灾难性回溯，已经中止了。"
+                f"换成不会指数级回退的写法再来喵")
+    matches, replaced = result
+
+    names = {index: name for name, index in compiled.groupindex.items()}
+    lines = [
+        f"正则：{pattern}",
+        f"文本：{len(text)} 字符" + (f"，flags={flags.strip()}" if flags.strip() else ""),
+    ]
+    if not matches:
+        lines.append("一处都没匹配上")
+    else:
+        if len(matches) == limit:
+            lines.append(f"匹配到至少 {len(matches)} 处（只列前 {limit} 处）：")
         else:
-            if len(matches) == limit:
-                lines.append(f"匹配到至少 {len(matches)} 处（只列前 {limit} 处）：")
-            else:
-                lines.append(f"匹配到 {len(matches)} 处：")
-            names = {index: name for name, index in compiled.groupindex.items()}
-            for order, match in enumerate(matches, 1):
-                start, end = match.span()
-                lines.append(f"{order}) [{start}..{end}] {_visible(match.group(0))}")
-                for index, value in enumerate(match.groups(), 1):
-                    label = f"组 {index}" + (f" ({names[index]})" if index in names else "")
-                    lines.append(f"   {label} = " + ("（空，没匹配到）" if value is None else _visible(value)))
-        if replace:
-            replaced = compiled.sub(replace, text)
-            lines.append(f"替换结果（{len(text)} → {len(replaced)} 字符）：")
-            lines.append(replaced if replaced else "（空字符串）")
-    except re.error as e:
-        return f"匹配的时候出错了：{e}"
+            lines.append(f"匹配到 {len(matches)} 处：")
+        for order, (start, end, whole, groups) in enumerate(matches, 1):
+            lines.append(f"{order}) [{start}..{end}] {_visible(whole)}")
+            for index, value in enumerate(groups, 1):
+                label = f"组 {index}" + (f" ({names[index]})" if index in names else "")
+                lines.append(f"   {label} = " + ("（空，没匹配到）" if value is None else _visible(value)))
+    if replace is not None:                            # 空串 = 把匹配删掉，所以不能用 if replace
+        shown = replaced if replaced is not None else ""
+        lines.append(f"替换结果（{len(text)} → {len(shown)} 字符）：")
+        lines.append(shown if shown else "（空字符串）")
     return _clip("\n".join(lines))
 
 
@@ -194,18 +242,20 @@ def diff_text(a: str = "", b: str = "", context: int = 3) -> str:
         around = 3
 
     lines_a, lines_b = a.splitlines(), b.splitlines()
-    diff = list(difflib.unified_diff(lines_a, lines_b, fromfile="旧", tofile="新",
+    full = list(difflib.unified_diff(lines_a, lines_b, fromfile="旧", tofile="新",
                                      n=around, lineterm=""))
-    if not diff:
+    if not full:
         same = "两边一模一样，没有差异"
         if a != b:      # 行内内容一样，差的只是行尾换行之类
             same += "（只有末尾换行 / 行尾这些细节不一样）"
         return same
+    # 先把完整差异统计完再截断，不然被截掉的那截新增 / 删除就不算数了
+    added = sum(1 for line in full if line.startswith("+") and not line.startswith("+++"))
+    removed = sum(1 for line in full if line.startswith("-") and not line.startswith("---"))
+    diff = full
     if len(diff) > MAX_LINES:
         diff = diff[:MAX_LINES]
         diff.append(f"…（差异太多，只列前 {MAX_LINES} 行）")
-    added = sum(1 for line in diff if line.startswith("+") and not line.startswith("+++"))
-    removed = sum(1 for line in diff if line.startswith("-") and not line.startswith("---"))
     header = (f"{len(lines_a)} 行 → {len(lines_b)} 行；新增 {added} 行，删除 {removed} 行"
               f"（上下文 {around} 行）")
     note = "（- 是旧的那边，+ 是新的那边）"
@@ -219,9 +269,13 @@ def _json_error(data: str, exc: json.JSONDecodeError) -> str:
     source = data.splitlines()
     if 1 <= exc.lineno <= len(source):
         bad = source[exc.lineno - 1]
+        caret = max(0, exc.colno - 1)
+        if len(bad) > 200:      # 坏行可能几千字，回显也裁一下，别再把整行灌进上下文
+            bad = bad[:200] + "…"
+            caret = min(caret, 200)
         lines.append(f">{exc.lineno:>4} | {bad}")
-        lines.append("     | " + " " * max(0, exc.colno - 1) + "^")
-    return "\n".join(lines)
+        lines.append("     | " + " " * caret + "^")
+    return _clip("\n".join(lines))
 
 
 def _describe(value) -> str:

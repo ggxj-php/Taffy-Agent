@@ -23,6 +23,9 @@ from ..llm import complete
 _CACHE_LIMIT = 200
 _cache = {}
 _lock = threading.Lock()
+# 最近一次翻译失败的原因。设计上失败就静默退回原查询（绝不能把检索搞挂），但一声不吭
+# 就没法排查「英文检索那一路怎么没生效」，所以留个记录（见 last_error）。
+_last_error = ""
 
 # 中文（含扩展区）——没有中文的问句本来就是英文，不用翻
 _CJK = re.compile(r"[\u3400-\u9fff]")
@@ -79,8 +82,12 @@ def to_english(query):
             api_key=settings.translate_key(),
             base_url=settings.translate_base_url(),
         )
-    except Exception:
-        return ""      # 接口挂了 / 没配 key —— 退回只用原查询，不要报错
+    except Exception as exc:
+        # 退回只用原查询是设计成这样的（翻译绝不能把检索搞挂），但别一声不吭：把
+        # 最近一次失败记下来，排查「英文检索那一路怎么没生效」时有据可查。
+        global _last_error
+        _last_error = f"{type(exc).__name__}: {exc}"
+        return ""
 
     english = _clean(reply)
     if not english:
@@ -90,3 +97,8 @@ def to_english(query):
             _cache.clear()
         _cache[query] = english
     return english
+
+
+def last_error():
+    """最近一次翻译失败的原因；没失败过就是空串。给排查用（翻译失败本身是静默的）。"""
+    return _last_error

@@ -18,6 +18,7 @@
 
 对外接口只有 KnowledgeBase.build() 和 KnowledgeBase.search() 两个方法。
 """
+import hashlib
 import math
 import os
 import pickle
@@ -102,6 +103,21 @@ _STEM_RULES = sorted(
     ),
     key=lambda rule: -len(rule[0]),
 )
+
+
+def _tokenizer_signature():
+    """切词规则的指纹：停用词表 / 词干规则 / jieba 版本变了，缓存里的分词结果就作废。
+
+    每块的 tokens 是存进缓存的，而这些规则一改，旧 tokens 就跟按新规则切出来的查询词
+    对不上——检索时两边错开，改了停用词却一点效果都没有（静默漏召回）。所以并进缓存
+    指纹，规则一改就让缓存里的 tokens 就地重切（见 _read_cache，原文和向量都还能用）。
+    """
+    import jieba
+
+    blob = "\x00".join(sorted(_STOPWORDS))
+    blob += "\x01" + repr(_STEM_RULES)
+    blob += "\x02" + str(getattr(jieba, "__version__", ""))
+    return hashlib.md5(blob.encode("utf-8")).hexdigest()
 
 
 def _stem_once(token):
@@ -233,7 +249,8 @@ def _split(text, size=KB_CHUNK_SIZE, overlap=KB_CHUNK_OVERLAP, max_tokens=0):
                 chunks.append(paragraph[start:start + size])
                 if start + size >= len(paragraph):
                     break
-                start += size - overlap
+                # 步长至少 1：overlap >= size 时 size - overlap <= 0，不加下界就原地死循环
+                start += max(1, size - overlap)
             continue
 
         if len(buffer) + len(paragraph) + 1 > size:
@@ -325,18 +342,62 @@ def _parse(rel_path, full_path, signature, want_vectors, max_tokens=0):
     return entry
 
 
-def _chunk_params(max_tokens):
+def _chunk_params(max_tokens, known=True):
     """切块参数。它是缓存的一部分：改了就说明块得重切，光看文件的 mtime + size 发现不了。
 
     max_tokens 光看「值变没变」不够——它是由「模型」推出来的，而模型已经在 embed 指纹
     里了；这里只记最终用的上限，换了模型或者换了上限都会让缓存整体作废重切（重切必须
     重算向量，钱也只能花这一遍）。
+
+    known=False（自动探测没探出来）时记 None 而不是 0：0 是个真实取值（不限），拿它当
+    「不知道」会把「探测失败」和「真的不限」混成一件事，下次探成功值一变就白白作废整库。
     """
     return {
         "size": KB_CHUNK_SIZE,
         "overlap": KB_CHUNK_OVERLAP,
-        "max_tokens": int(max_tokens or 0),
+        "max_tokens": None if not known else int(max_tokens or 0),
     }
+
+
+def _same_chunk_params(stored, params):
+    """比对切块参数。max_tokens 若有一边是 None（探测没探出来），那一项就不比——
+    否则「这次探测失败、下次探成功」的值不一样，整个缓存被判过期、向量全白重算。"""
+    if stored.get("size") != params.get("size") or stored.get("overlap") != params.get("overlap"):
+        return False
+    before, now = stored.get("max_tokens"), params.get("max_tokens")
+    if before is None or now is None:
+        return True
+    return before == now
+
+
+# 缓存白名单：只允许反序列化这些类型。缓存在 .cache/（可写），裸 pickle.load 意味着
+# 谁写进这个文件谁就能在服务进程里执行任意代码。把 find_class 收窄到缓存里真正会用到
+# 的那些（基础容器 + numpy 数组 / dtype）；出现白名单外的类型就当缓存坏了丢掉重建——
+# 宁可重算一遍，也不执行未知代码。
+_PICKLE_ALLOWED = {
+    ("builtins", "dict"), ("builtins", "list"), ("builtins", "tuple"),
+    ("builtins", "set"), ("builtins", "frozenset"), ("builtins", "str"),
+    ("builtins", "int"), ("builtins", "float"), ("builtins", "bool"),
+    ("builtins", "bytes"), ("builtins", "bytearray"), ("builtins", "NoneType"),
+    ("numpy", "dtype"), ("numpy", "ndarray"),
+    ("numpy._core.numeric", "_frombuffer"), ("numpy.core.numeric", "_frombuffer"),
+    ("numpy._core.multiarray", "_reconstruct"), ("numpy.core.multiarray", "_reconstruct"),
+}
+
+
+class _SafeUnpickler(pickle.Unpickler):
+    """只认缓存里会用到的类型，挡住 pickle 的任意代码执行（见 _PICKLE_ALLOWED）。"""
+
+    def find_class(self, module, name):
+        if (module, name) in _PICKLE_ALLOWED:
+            return super().find_class(module, name)
+        raise pickle.UnpicklingError(f"缓存里出现不允许的类型：{module}.{name}")
+
+
+def _load_cache_file():
+    """读缓存文件，白名单之外的一律当坏缓存（抛异常，由调用方兜底重建）。"""
+    with open(KB_CACHE_PATH, "rb") as f:
+        return _SafeUnpickler(f).load()
 
 
 def _read_cache(want_vectors, embed_sig, chunk_params):
@@ -347,10 +408,12 @@ def _read_cache(want_vectors, embed_sig, chunk_params):
 
     切块参数对不上就整份丢掉重切（老缓存里没这个字段，按当年的默认参数算，所以
     参数没变的话老缓存照样能用，不会白重算一遍向量）。
+
+    切词规则（停用词 / 词干 / jieba 版本）变了，就把每块的 tokens 就地重切一遍：
+    原文和向量都还能用，只是分词结果得按新规则重来，不用重发向量（省钱）。
     """
     try:
-        with open(KB_CACHE_PATH, "rb") as f:
-            cache = pickle.load(f)
+        cache = _load_cache_file()
     except Exception:
         return {}
     if cache.get("version") != _CACHE_VERSION:
@@ -358,12 +421,16 @@ def _read_cache(want_vectors, embed_sig, chunk_params):
     stored = cache.get("chunk") or {"size": KB_CHUNK_SIZE,
                                     "overlap": KB_CHUNK_OVERLAP,
                                     "max_tokens": 0}
-    if stored != chunk_params:
+    if not _same_chunk_params(stored, chunk_params):
         return {}
     files = cache.get("files", {})
     if want_vectors and cache.get("embed") != embed_sig:
         for entry in files.values():
             entry.pop("vectors", None)
+    if cache.get("tokenizer") != _tokenizer_signature():
+        for entry in files.values():
+            for chunk in entry.get("chunks", []):
+                chunk["tokens"] = _segment(chunk["text"])
     return files
 
 
@@ -371,6 +438,7 @@ def _write_cache(files, embed_sig, chunk_params):
     os.makedirs(os.path.dirname(KB_CACHE_PATH), exist_ok=True)
     with open(KB_CACHE_PATH, "wb") as f:
         pickle.dump({"version": _CACHE_VERSION, "embed": embed_sig,
+                     "tokenizer": _tokenizer_signature(),
                      "chunk": chunk_params, "files": files}, f)
 
 
@@ -542,7 +610,10 @@ class KnowledgeBase:
         # 块长按它收口——小窗口的模型（512 / 256 / 128）配 500 字的块会被静默截断或者 400。
         probed = want_vectors
         max_tokens = embed.max_input_tokens() if want_vectors else 0
-        chunk_params = _chunk_params(max_tokens)
+        # 探测没探出来时这个值不可信（分不清是「真不限」还是「没探到」），别写进指纹，
+        # 免得下次探成功值一变就把整个缓存判过期、向量全白重算（见 _chunk_params）。
+        max_tokens_known = embed.max_input_tokens_known() if want_vectors else True
+        chunk_params = _chunk_params(max_tokens, max_tokens_known)
         cached = _read_cache(want_vectors, embed_sig, chunk_params)
         embed.reset_progress()
         names = _scan()
@@ -556,6 +627,7 @@ class KnowledgeBase:
         weights = []
         vector_failed = []          # 向量没算上的文件（多半是限流），原因也带上
         vector_stopped = False      # 连着失败就不再一个个去磕了，剩下的先只建词索引
+        vector_config_error = ""    # 配置错（维度对不上之类），重启也不会好，单独报
 
         for rel_path in names:
             self.progress["current"] = rel_path
@@ -574,6 +646,12 @@ class KnowledgeBase:
                 if want_vectors and not vector_stopped:
                     try:
                         entry = _parse(rel_path, full_path, signature, True, max_tokens)
+                    except embed.EmbedConfigError as exc:
+                        # 配置错（典型：EMBED_DIM 跟接口实际返回的维度对不上）。这重启
+                        # 多少次都不会好，必须去改配置——明确报出来、指到 .env，并且别
+                        # 再往下磕其它文件（每个都会撞同一堵墙）。这次先只建词索引。
+                        vector_config_error = str(exc)
+                        vector_stopped = True
                     except Exception as exc:
                         # 一个文件的向量算不出来（多半是限流掐了）不该让整库白建：这个
                         # 文件先不带向量存着，接着算后面的。算好的都在缓存里，下次重启
@@ -605,7 +683,14 @@ class KnowledgeBase:
                 _write_cache(files, embed_sig, chunk_params)
 
         self.progress["current"] = ""
-        if vector_failed:
+        if vector_config_error:
+            # 配置错要跟「限流，重启会接着算」分开：这种重启多少次都不会好，必须改配置，
+            # 报「重启服务会接着算」等于把用户指到错误动作上。
+            self.vector_error = (
+                f"向量配置有误，重启也不会好：{vector_config_error} "
+                f"请按上面的提示改 .env（或后台配置）后重启服务；这次先只用词索引。"
+            )
+        elif vector_failed:
             shown = "；".join(vector_failed[:3])
             if len(vector_failed) > 3:
                 shown += f"…（还有 {len(vector_failed) - 3} 个）"
@@ -689,7 +774,8 @@ class KnowledgeBase:
             routes.append((self._rank_vector(query), KB_VECTOR_WEIGHT))
 
         if len(routes) == 1:
-            return [(score, self.chunks[i]) for i, score in routes[0][0][:top_k]]
+            ranked = [(score, self.chunks[i]) for i, score in routes[0][0]]
+            return self._dedupe(ranked)[:top_k]
         return self._fuse(routes, top_k)
 
     def _top(self, scores, floor):
@@ -743,5 +829,18 @@ class KnowledgeBase:
         for ranked, weight in routes:
             for rank, (i, _) in enumerate(ranked):
                 fused[i] = fused.get(i, 0.0) + weight / (_RRF_K + rank)
-        best = sorted(fused.items(), key=lambda kv: -kv[1])[:top_k]
-        return [(score, self.chunks[i]) for i, score in best]
+        best = sorted(fused.items(), key=lambda kv: -kv[1])
+        return self._dedupe([(score, self.chunks[i]) for i, score in best])[:top_k]
+
+    def _dedupe(self, ranked):
+        """同内容异名的两个文件会让同一段在结果里出现两次（RRF 里各拿一次分），
+        这里按正文去重，只留名次靠前的那份。"""
+        out = []
+        seen = set()
+        for score, chunk in ranked:
+            text = chunk["text"]
+            if text in seen:
+                continue
+            seen.add(text)
+            out.append((score, chunk))
+        return out

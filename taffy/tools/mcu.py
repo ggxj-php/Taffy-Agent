@@ -79,8 +79,12 @@ def _num(args: dict, key: str, default=None, positive=False):
 
 
 def _fmt(value: float, unit: str = "", digits: int = 4) -> str:
-    """去掉多余的小数零，再带上单位。"""
+    """去掉多余的小数零，再带上单位。值太小、定点数位不够时会自动换成科学计数法。"""
     text = f"{value:.{digits}f}".rstrip("0").rstrip(".")
+    if value and text in ("", "0", "-0", "-"):   # 定点全是 0，说明位太少，换指数写法
+        mantissa, _, exponent = f"{value:.{digits}e}".partition("e")
+        mantissa = mantissa.rstrip("0").rstrip(".")
+        text = f"{mantissa}e{int(exponent)}"
     return f"{text or '0'} {unit}".rstrip()
 
 
@@ -96,19 +100,22 @@ def _uart(args: dict) -> str:
     usartdiv = f_cpu / (over * baud)
     integer = int(usartdiv)
     fraction = usartdiv - integer
-    # 过采样 16 倍时 BRR 的整数部分 12 位、小数部分 4 位；8 倍时小数只有 1 位
+    # OVER16：BRR 的整数部分在 bit15:4、小数 4 位在 bit3:0；
+    # OVER8：小数只有 1 位，而且放在 bit3（不是 bit0）——放错了 BRR 就整个不对
     frac_bits = 4 if over == 16 else 1
+    frac_shift = 0 if over == 16 else 3
     frac_code = round(fraction * (1 << frac_bits))
     if frac_code >= (1 << frac_bits):        # 小数进位到整数
         integer += 1
         frac_code = 0
-    brr = (integer << frac_bits) | frac_code
+    brr = (integer << 4) | (frac_code << frac_shift)
 
-    nearest = round(usartdiv)
-    if nearest < 1:
+    # 实际波特率要按 BRR 里那份「整数 + 小数」的分频算，不能把小数丢掉再用整数凑
+    actual_div = integer + frac_code / (1 << frac_bits)
+    if actual_div < 1:
         return (f"分频值算出来是 {_fmt(usartdiv)}，小于 1：主频太低或者波特率太高，"
                 "这个波特率在这颗 MCU 上配不出来")
-    actual = f_cpu / (over * nearest)
+    actual = f_cpu / (over * actual_div)
     error = (actual - baud) / baud * 100
 
     ubrr = f_cpu / (16 * baud) - 1
@@ -116,7 +123,8 @@ def _uart(args: dict) -> str:
         f"目标：f_cpu={_fmt(f_cpu / 1e6, 'MHz')}，波特率={_fmt(baud, 'bps')}，过采样={int(over)} 倍",
         f"USARTDIV（精确值）={usartdiv:.6f}",
         f"BRR = 0x{brr:04X}（整数部分 {integer}，小数部分 {frac_code}/{1 << frac_bits}）",
-        f"最接近的整数分频 {nearest} → 实际波特率 {_fmt(actual, 'bps', 1)}，误差 {error:+.3f}%",
+        f"按 BRR 反推：实际分频 {_fmt(actual_div, '', 6)} → 实际波特率 {_fmt(actual, 'bps', 1)}，"
+        f"误差 {error:+.3f}%",
         f"AVR 风格 UBRR（16 倍）= {round(ubrr)}（精确值 {ubrr:.4f}）",
     ]
     if abs(error) > 2:
@@ -178,8 +186,11 @@ def _timer(args: dict) -> str:
 
 
 def _adc(args: dict) -> str:
-    bits = int(_num(args, "bits", 12))
+    raw_bits = _num(args, "bits", 12)
+    bits = 12 if raw_bits is None else int(raw_bits)
     vref = _num(args, "vref", 3.3)
+    if vref is None or vref <= 0:
+        return "vref 要大于 0"
     if not 2 <= bits <= 32:
         return "bits 要在 2~32 之间（常见 8 / 10 / 12 / 16）"
     levels = 1 << bits
@@ -425,5 +436,5 @@ def mcu_calc(op: str = "", **kwargs) -> str:
         return f"不认识的 op：{op or '(空)'}。可选 " + "、".join(_OPS)
     try:
         return _OPS[key](kwargs)
-    except ValueError as exc:
+    except (ValueError, TypeError, ZeroDivisionError) as exc:
         return f"参数不对：{exc}"

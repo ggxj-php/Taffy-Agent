@@ -24,8 +24,14 @@ def execute(name: str, raw_arguments: str):
     """执行一次工具调用，返回 (参数, 结果文本)。异常都转成结果文本，不往外抛。"""
     try:
         args = json.loads(raw_arguments or "{}")
-    except json.JSONDecodeError:
-        args = {}
+    except json.JSONDecodeError as exc:
+        # 别把解析失败的参数悄悄换成 {} 接着跑：那样会拿默认值算出「看似成功」的结果，
+        # 模型还不知道自己发错了。直接把错误交回给模型，让它重发一次。
+        return {}, (f"参数不是合法的 JSON，没法调用 {name}：{exc}。"
+                    f"请把参数写成 JSON 对象再调用一次喵。")
+    if not isinstance(args, dict):
+        return {}, (f"参数要是一个 JSON 对象，收到的是 {type(args).__name__}，"
+                    f"没法调用 {name}。")
     try:
         if name not in TOOL_MAP:
             return args, f"错误：没有名为 {name} 的工具"

@@ -95,28 +95,35 @@ def _int_value(text: str, default_base: int = 10) -> int:
 
 
 def _bit_width(value, default: int = 16) -> int:
+    if value in (None, ""):
+        return default
     try:
         width = int(value)
     except (TypeError, ValueError):
-        return default
-    return max(1, min(width, 64))
+        raise ValueError(f"bits 得是整数，收到的是 {value!r}")
+    if not 1 <= width <= 64:
+        raise ValueError(f"bits 要在 1~64 之间（收到 {width}）")
+    return width
 
 
 def _bit_operand(text: str) -> int:
-    """位运算的操作数：带前缀按前缀读；只有 0-9 按十进制；含 a-f 就按十六进制。"""
+    """位运算的操作数：带 0x/0b/0o 前缀按前缀读（允许前面的正负号）；只有 0-9 按十进制；含 a-f 就按十六进制。"""
     raw = str(text).strip().replace("_", "").replace(" ", "")
-    if raw.lower().startswith(("0x", "0b", "0o")):
-        return _int_value(raw, 16)
+    if not raw:
+        raise ValueError(f"「{text}」读不出数")
     sign = -1 if raw[:1] == "-" else 1
     body = raw[1:] if raw[:1] in "+-" else raw
     if not body:
         raise ValueError(f"「{text}」读不出数")
-    if any(char in "abcdefABCDEF" for char in body):
-        try:
+    lowered = body.lower()
+    if lowered.startswith(("0x", "0b", "0o")):
+        return sign * _int_value(body, 16)
+    try:
+        if any(char in "abcdefABCDEF" for char in body):
             return sign * int(body, 16)
-        except ValueError:
-            raise ValueError(f"「{text}」读不出数")
-    return sign * int(body, 10)
+        return sign * int(body, 10)
+    except ValueError:
+        raise ValueError(f"「{text}」读不出数")
 
 
 def _group(value: int, width: int, marker: str) -> str:
@@ -265,12 +272,18 @@ def _float_op(args: dict) -> str:
     back = struct.unpack(pack_code, packed)[0]
     layout = format(bits, f"0{total}b")
     sign, exponent, fraction, exp_bits, frac_bits, bias = _float_fields(bits, precision)
+    if exponent == 0:
+        exp_line = "阶码 = 0（零或非规格化数，没有隐含的前导 1）"
+    elif exponent == (1 << exp_bits) - 1:
+        exp_line = f"阶码 = {exponent}（全 1：无穷大或 NaN，没有常规指数）"
+    else:
+        exp_line = f"阶码 = {exponent}（实际指数 {exponent - bias}）"
     lines = [
         f"输入：{raw}（{precision} 位浮点）",
         f"位型：0x{bits:0{total // 4}X}",
         f"二进制：{_group(bits, total, '0b')}",
         f"  符号位 {layout[0]}｜阶码 {layout[1:1 + exp_bits]}｜尾数 {layout[1 + exp_bits:]}",
-        f"阶码 = {exponent}（实际指数 {exponent - bias}）",
+        exp_line,
         f"还原成小数：{back!r}",
     ]
     if back != value and math.isfinite(value) and math.isfinite(back):
@@ -328,7 +341,7 @@ def _bits_op(args: dict) -> str:
     else:
         bit = (left >> right) & 1
         return "\n".join([
-            f"a = 0x{left:X}（{_group(left, width, '0b')}）",
+            f"a = 0x{left & ((1 << width) - 1):X}（{_group(left, width, '0b')}）",
             f"第 {right} 位 = {bit}（{'是 1，置位了' if bit else '是 0，没置位'}）",
         ])
 

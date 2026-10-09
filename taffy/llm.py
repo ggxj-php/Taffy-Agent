@@ -9,6 +9,10 @@ from .config import MAX_TOKENS
 _clients = {}
 _clients_lock = threading.Lock()
 
+# 没读到 key 时统一报这一句：光靠 OpenAI 客户端自己抛的错，用户看不出要去哪配。
+_NO_KEY = ("没读到聊天用的 API Key：请在本项目的 .env 里配 DEEPSEEK_API_KEY，"
+           "或者打开网页后台把 key 填上，然后再试一次。")
+
 
 def _client(api_key, base_url):
     """按 (key, 接口地址) 建客户端。
@@ -38,6 +42,8 @@ def complete(messages: list, model: str = "", api_key: str = "", base_url: str =
     model = (model or "").strip() or settings.chat_model()
     key = (api_key or "").strip() or settings.chat_key()
     base = (base_url or "").strip() or settings.chat_base_url()
+    if not key:
+        raise RuntimeError(_NO_KEY)
     reply = _client(key, base).chat.completions.create(
         model=model,
         messages=messages,
@@ -63,6 +69,8 @@ def stream_chat(messages: list, tools: list, model: str = "",
     settings.remember_model(model)
     key = (api_key or "").strip() or settings.chat_key()
     base = (base_url or "").strip() or settings.chat_base_url()
+    if not key:
+        raise RuntimeError(_NO_KEY)
 
     stream = _client(key, base).chat.completions.create(
         model=model,

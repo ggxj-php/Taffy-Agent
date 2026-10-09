@@ -235,8 +235,11 @@ def update_check(request: Request, remote: str = ""):
     provider = (remote or settings.update_remote()).strip().lower()
     if provider not in settings.UPDATE_REMOTES:
         raise HTTPException(status_code=400, detail="只能从 gitee 或者 github 拉喵")
-    settings.set_update_remote(provider)
-    return update.check(provider)
+    info = update.check(provider)
+    # 真跑通了才把这次选的厂家记下来；检查失败就保留原来的，免得下次打开指向一个拉不通的源
+    if not info.get("error"):
+        settings.set_update_remote(provider)
+    return info
 
 
 class UpdateRequest(BaseModel):
@@ -251,8 +254,11 @@ def update_apply(req: UpdateRequest, request: Request):
     provider = (req.remote or settings.update_remote()).strip().lower()
     if provider not in settings.UPDATE_REMOTES:
         raise HTTPException(status_code=400, detail="只能从 gitee 或者 github 拉喵")
-    settings.set_update_remote(provider)
-    return update.apply(provider)
+    result = update.apply(provider)
+    # 拉成功了才把这次选的厂家记下来；失败就保留原来的，免得下次自动挑一个拉不通的源
+    if result.get("ok"):
+        settings.set_update_remote(provider)
+    return result
 
 
 class EmbedRequest(BaseModel):

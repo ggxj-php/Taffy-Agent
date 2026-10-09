@@ -4,6 +4,8 @@ import shutil
 
 from ..sandbox import WORKSPACE, safe_path
 
+MAX_READ_BYTES = 512 * 1024   # 一次最多读这么多，别让一个超大文件把内存 / 上下文撑爆
+
 SPECS = [
     {
         "type": "function",
@@ -96,12 +98,17 @@ def list_files(path: str = ".") -> str:
 
 
 def read_file(path: str) -> str:
-    """读取工作区内的文本文件"""
+    """读取工作区内的文本文件（有大小上限，超了只给前半截）"""
     full = safe_path(path)
     if not os.path.isfile(full):
         return f"错误：文件不存在 {path}"
+    size = os.path.getsize(full)
     with open(full, "r", encoding="utf-8", errors="replace") as f:
-        return f.read()
+        text = f.read(MAX_READ_BYTES)
+    if size > MAX_READ_BYTES:
+        text += (f"\n…（文件 {size} 字节，超过 {MAX_READ_BYTES} 字节上限，只给了前半截；"
+                 f"要没被截的整份内容请想办法分段读）")
+    return text
 
 
 def write_file(path: str, content: str) -> str:
