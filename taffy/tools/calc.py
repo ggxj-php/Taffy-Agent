@@ -168,7 +168,10 @@ def _digits_of(n: int) -> int:
 
 
 def _guard_digits(estimated: float, what: str = "结果"):
-    if estimated > MAX_DIGITS:
+    # estimated 是「位数上界」：整数幂那套 log10 估法本身多加 1（个别调用方不加），
+    # 再留 1e-6 位余量吸收 log10 的浮点毛刺——log10(10**1500) 会给出 1500.0000000000002，
+    # 不减掉这个偏移就会把正好卡在上限的式子误拒（10**751、10**1500 都栽在这儿）
+    if estimated - 1 > MAX_DIGITS + 1e-6:
         raise ValueError(f"{what}大约有 {int(estimated)} 位，超过 {MAX_DIGITS} 位就不算了"
                          "（太长也没人看）；要算就先缩小范围")
 
@@ -177,7 +180,9 @@ def _power(base, exp, prec: int):
     if isinstance(base, int) and isinstance(exp, int) and exp >= 0:
         if base in (0, 1, -1):          # 这几个无论多少次方都很快
             return base ** exp
-        _guard_digits(exp * _digits_of(abs(base)))
+        # 位数要按对数估：底数 ≥ 10 时它的位数会「进位」，直接乘底数位数会把
+        # 10**751 估成 1502 位这种两倍偏差，把本来算得出来的式子误拒掉
+        _guard_digits(exp * math.log10(abs(base)) + 1)
         return base ** exp
     b, e = _dec(base), _dec(exp)
     if e.is_zero():
@@ -192,8 +197,7 @@ def _power(base, exp, prec: int):
         estimated = float(e) * float(abs(b).log10())
     except (OverflowError, ValueError):
         estimated = 0
-    if estimated > MAX_DIGITS:
-        _guard_digits(estimated)
+    _guard_digits(estimated)
     with localcontext() as ctx:
         ctx.prec = prec + 10
         return +(b ** e)
@@ -427,9 +431,11 @@ def _fn_round(values, prec):
             quotient += 1
         return (quotient if x >= 0 else -quotient) * factor
     with localcontext() as ctx:
-        ctx.prec = prec + 10
-        rounded = _dec(x).quantize(Decimal(1).scaleb(-digits),
-                                   rounding=decimal.ROUND_HALF_UP)
+        # quantize 要求结果的系数位宽不超过上下文精度，而全局上下文只有 prec+10 位，
+        # 大数取整就会抛 InvalidOperation（再被 _decimal_hint 误说成「实数里没有结果」）；
+        # 按「整数部分位数 + 保留位数」临时抬高本次精度，不动全局
+        ctx.prec = max(ctx.prec, x.adjusted() + 1 + max(digits, 0))
+        rounded = x.quantize(Decimal(1).scaleb(-digits), rounding=decimal.ROUND_HALF_UP)
     return int(rounded) if digits <= 0 else +rounded
 
 
@@ -568,6 +574,10 @@ def _literal(node, source):
     text = (text if text is not None else repr(node.value)).strip().replace("_", "")
     if isinstance(node.value, bool):
         raise ValueError("表达式里不能有 True / False")
+    # 显式挡掉 0x / 0b / 0o：不挡的话 int() 会抛出英文的 Python 原生异常文本，
+    # 而且「看得懂就顺手支持」会让同一个式子写法不同结果不同，不如直接说清楚
+    if re.fullmatch(r"[+-]?0[xXbBoO][0-9a-fA-F]+", text):
+        raise ValueError("不支持 0x / 0b / 0o 进制字面量，请写成十进制喵")
     if isinstance(node.value, int):
         return int(text)
     if isinstance(node.value, float):

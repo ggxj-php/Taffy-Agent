@@ -79,6 +79,10 @@ def _int_value(text: str, default_base: int = 10) -> int:
     sign = -1 if raw[:1] == "-" else 1
     if raw[:1] in "+-":
         raw = raw[1:]
+    # 正负号只许有一个、而且必须写在最前面。「--5」这种去掉一个号以后剩下的还带符号，
+    # 交给 int() 会读成 -5 再乘上外层的负号，符号正好反了（--5 变成 +5），所以这里直接拦掉。
+    if any(char in "+-" for char in raw):
+        raise ValueError(f"「{text}」不是合法的数字：正负号只能有一个，而且必须写在最前面")
     lowered = raw.lower()
     if lowered.startswith("0x"):
         base, digits = 16, raw[2:]
@@ -207,6 +211,13 @@ def _twos_op(args: dict) -> str:
         lines.append(f"⚠ {value} 超出了 {width} 位有符号数的范围（{low} ~ {high}），位型是按截断给的")
     else:
         lines.append(f"{width} 位有符号范围是 {low} ~ {high}，这里放得下")
+    # raw 是原输入（已去掉下划线/空格）。纯 0/1 串和十进制在字面上分不清：同一串
+    # 「11111111」在 bits=16 时走这条十进制路径，在 bits=8 时又被当成 8 位位型，语义跟着位宽漂。
+    # 这里不改判定结果，只把这件事说明白，并给出「按位型读」的写法。
+    if len(raw) > 1 and set(raw) <= {"0", "1"}:
+        lines.append(f"提示：「{raw}」只由 0/1 组成，这里按十进制读成了 {value}、再按 {width} 位给位型"
+                     f"（同一串换个 bits 可能就被当成位型，结果完全不同）。"
+                     f"如果本意是二进制位型，请写成 0b{raw}，或者把 bits 设成 {len(raw)}")
     return "\n".join(lines)
 
 

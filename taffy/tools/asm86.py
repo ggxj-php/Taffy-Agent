@@ -14,7 +14,7 @@ SBB / CMP / INC / DEC / NEG；MUL / IMUL / DIV / IDIV / CBW / CWD；AND / OR / X
 NOT / TEST；SHL / SAL / SHR / SAR / ROL / ROR / RCL / RCR；JMP / 各种 Jcc / LOOP /
 LOOPE / LOOPNE / CALL / RET / INT / IRET / HLT / NOP；CLC / STC / CMC / CLD / STD /
 CLI / STI；MOVSB / MOVSW / STOSB / STOSW / LODSB / LODSW / CMPSB / CMPSW / SCASB /
-SCASW（带 REP / REPZ / REPNZ）。
+SCASW（带 REP / REPZ / REPNZ；REP 跟在 CMPS / SCAS 后面就是 REPZ，看 ZF 决定停不停）。
 
 中断直接内置处理，不走中断向量表：INT 21H 的 09H 打印字符串、02H 打印字符、
 01H / 0AH 读键盘（从 stdin 参数取）、4CH / 00H 结束程序，INT 20H 结束，
@@ -54,6 +54,11 @@ FLAG_ORDER = (
     ("CF", F_CF), ("PF", F_PF), ("AF", F_AF), ("ZF", F_ZF), ("SF", F_SF),
     ("OF", F_OF), ("IF", F_IF), ("DF", F_DF), ("TF", F_TF),
 )
+
+# 8086 / 8088 的 FLAGS 里这几位恒为 1、写不进去：bit1 是保留位，bit 12~15 也是。
+# 这正是区分 8086 和 286 的经典判据（286 上 bit 12~15 是可写的），
+# PUSHF / POPF / IRET 都要带上它，否则 `STC; PUSHF; POP AX` 会得到 0201H 而不是 F203H
+F_FIXED_ONE = 0x0002 | 0xF000
 
 _R16 = ("AX", "BX", "CX", "DX", "SI", "DI", "BP", "SP")
 _R8 = {
@@ -983,6 +988,14 @@ class _Machine:
         else:
             self.flags &= ~bit
 
+    def _flags_word(self):
+        """PUSHF 压栈 / IRET 弹栈用的那个「完整 FLAGS」值，带上恒 1 的保留位。"""
+        return (self.flags | F_FIXED_ONE) & MASK16
+
+    def _load_flags_word(self, word):
+        """POPF / IRET 把 16 位值装回 FLAGS：只认低 12 位的真实标志，保留位恒 1。"""
+        self.flags = (word & 0x0FFF) | F_FIXED_ONE
+
     def set_logic_flags(self, result, bits):
         self.set_flag(F_CF, False)
         self.set_flag(F_OF, False)
@@ -1112,7 +1125,9 @@ class _Machine:
         mask = (1 << bits) - 1
         left = self.read(dst, bits)
         right = self.read(src, bits)
-        borrow = 1 if kind == "SBB" else 0
+        # SBB 只在 CF=1 时才多减那个借位（跟上面 do_add 里 ADC 的写法对齐）：
+        # 无条件减 1 会让 `CLC; SBB` 变成 5-2-1=2，而真机是 5-2-0=3
+        borrow = 1 if kind == "SBB" and self.flag(F_CF) else 0
         total = left - right - borrow
         result = total & mask
         self.set_flag(F_CF, total < 0)
@@ -1228,11 +1243,16 @@ class _Machine:
                 self.set_flag(F_OF, bool(value & sign_bit))
             elif mnemonic == "SAR":
                 self.set_flag(F_OF, False)
-            elif mnemonic == "ROR":
-                # ROR 的 OF 看结果最高两位是否不同，不能套 ROL 那套 MSB^CF
+            elif mnemonic in ("ROR", "RCR"):
+                # 右旋的 OF 看结果最高两位是否不同（Intel SDM 正文：For right rotates,
+                # the OF flag is set to the exclusive OR of the two most-significant bits
+                # of the result）。RCR 跟 ROR 同族，所以不能套 ROL 那条 MSB(结果)^CF。
+                # SDM 里 RCR 的操作伪码写的是 OF := MSB(DEST) XOR CF，而且排在旋转循环
+                # 之前，跟同一页正文自相矛盾（RCL 那段的 OF 就规规矩矩排在循环之后）；
+                # 这里按正文统一，别照伪码改回去
                 self.set_flag(F_OF,
                               ((result >> (bits - 1)) & 1) != ((result >> (bits - 2)) & 1))
-            else:                                   # ROL / RCR
+            else:                                   # ROL
                 self.set_flag(F_OF, ((result >> (bits - 1)) & 1) != self.flag(F_CF))
         if mnemonic in ("SHL", "SAL", "SHR", "SAR"):
             self.set_flag(F_ZF, result == 0)
@@ -1438,16 +1458,22 @@ class _Machine:
             self.do_shift(mnemonic, operands[0], amount, width)
             return
         if mnemonic == "PUSH":
-            self.push(self.read(operands[0], 16))
+            # 8086 的 `PUSH SP` 压的是自减之后的 SP（286 之后才改成压自减前的旧值）。
+            # 之所以按 8086 来：这里的操作数是先读出来再压栈的，直接 read 会拿到旧 SP，
+            # 只有 SP 这一个寄存器需要在读的时候先按 -2 算
+            value = self.read(operands[0], 16)
+            if operands[0] == ("r16", "SP"):
+                value = (value - 2) & MASK16
+            self.push(value)
             return
         if mnemonic == "POP":
             self.write(operands[0], self.pop(), 16)
             return
         if mnemonic == "PUSHF":
-            self.push(self.flags)
+            self.push(self._flags_word())
             return
         if mnemonic == "POPF":
-            self.flags = self.pop() & 0x0FFF
+            self._load_flags_word(self.pop())
             return
         if mnemonic == "CLC":
             self.set_flag(F_CF, False)
@@ -1476,7 +1502,7 @@ class _Machine:
         if mnemonic == "IRET":
             self.ip = self.pop()
             self.sregs["CS"] = self.pop()
-            self.flags = self.pop() & 0x0FFF
+            self._load_flags_word(self.pop())
             return
         if mnemonic == "CALL":
             self.push(self.ip)
@@ -1516,6 +1542,12 @@ class _Machine:
         bits = 8 if mnemonic.endswith("B") else 16
         step = 1 if bits == 8 else 2
         repeat = prefix in _PREFIXES
+        # 真机上 F3 只有一个前缀：跟在 MOVS / STOS / LODS 后面是无条件重复的 REP，
+        # 跟在 CMPS / SCAS 后面就是 REPE / REPZ（相等才继续，看 ZF）。
+        # 汇编器这边按名字分了 REP 和 REPE / REPZ，所以这里把裸 REP 补成 REPE，
+        # 免得 `REP CMPSB` 被当成无条件扫到底、把「不等就停」的终止条件丢掉
+        if prefix == "REP" and mnemonic.startswith(("CMPS", "SCAS")):
+            prefix = "REPE"
         condition = prefix in ("REPE", "REPZ", "REPNE", "REPNZ")
         want_zero = prefix in ("REPE", "REPZ")
 

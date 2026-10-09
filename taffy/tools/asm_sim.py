@@ -15,7 +15,8 @@ from ..sandbox import safe_path
 MEM_SIZE = 256
 REG_COUNT = 8
 MASK = 0xFFFF
-DEFAULT_MAX_STEPS = 10000
+# 教学程序里几千次迭代的循环很常见（每轮好几条指令），上限太小会把正常程序误判成死循环
+DEFAULT_MAX_STEPS = 200000
 MAX_TRACE = 200
 MAX_MEM_DUMP = 40
 
@@ -51,7 +52,8 @@ SPECS = [
                     },
                     "max_steps": {
                         "type": "integer",
-                        "description": "最多执行多少步，默认 10000，用来防死循环",
+                        "description": "最多执行多少步，默认 200000，用来防死循环；"
+                                       "正常程序被误判成死循环时可以调大，想更快停下来可以调小",
                     },
                     "trace": {
                         "type": "boolean",
@@ -278,10 +280,15 @@ def _step(cell, regs, flags, memory, pc):
         regs[cell[1]] = regs[cell[2]]
         return nxt
     if op == "LOAD":
-        regs[cell[1]] = memory[cell[2] % MEM_SIZE]
+        if not 0 <= cell[2] < MEM_SIZE:
+            # 不回绕：悄悄绕回低地址会改掉/读到别处的数据，教学时几乎看不出来
+            raise ValueError(f"LOAD 的地址 {cell[2]} 超出内存范围（0~{MEM_SIZE - 1}）")
+        regs[cell[1]] = memory[cell[2]]
         return nxt
     if op == "STORE":
-        memory[cell[2] % MEM_SIZE] = regs[cell[1]]
+        if not 0 <= cell[2] < MEM_SIZE:
+            raise ValueError(f"STORE 的地址 {cell[2]} 超出内存范围（0~{MEM_SIZE - 1}）")
+        memory[cell[2]] = regs[cell[1]]
         return nxt
     if op in _RRR:
         left, right = regs[cell[2]], regs[cell[3]]
@@ -300,11 +307,14 @@ def _step(cell, regs, flags, memory, pc):
             result, flags["C"] = left | right, 0
         else:
             result, flags["C"] = left ^ right, 0
-        # V 是有符号溢出：加法看两操作数同号而结果变号，减法看两操作数异号而结果变号
+        # V 是有符号溢出：加法看两操作数同号而结果变号，减法看两操作数异号而结果变号；
+        # MUL 跟 C 一样，只看结果放不放得下 16 位（x86 的 MUL 也只定义 CF/OF）
         if op == "ADD":
             flags["V"] = 1 if (left ^ result) & (right ^ result) & 0x8000 else 0
         elif op == "SUB":
             flags["V"] = 1 if (left ^ right) & (left ^ result) & 0x8000 else 0
+        elif op == "MUL":
+            flags["V"] = flags["C"]
         else:
             flags["V"] = 0
         regs[cell[1]] = result
@@ -337,9 +347,15 @@ def _step(cell, regs, flags, memory, pc):
         return nxt
     if op in _RSI:
         value, count = regs[cell[2]], cell[3]
+        count = min(count, 16)     # 只有 16 位，移超过字长的位跟移光一样，把 C 的判定位压回范围内
         if op == "SHL":
             shifted = value << count
-            result, flags["C"] = shifted & MASK, 1 if shifted > MASK else 0
+            result = shifted & MASK
+            # C 只记「最后一次」移出的那一位：左移时最后移出的是 bit(16-count)。
+            # 原来判的是「有没有任何一位被移出去」（shifted > MASK），count≥2 时会多报 C=1。
+            # count=0 一位都没移，标志位不动；count 超过字长时全部移光，最后移出的是最低位。
+            if count:
+                flags["C"] = 1 if (value >> (16 - count)) & 1 else 0
         else:
             flags["C"] = 1 if count and (value >> (count - 1)) & 1 else 0
             result = (value >> count) & MASK
@@ -353,7 +369,7 @@ def _step(cell, regs, flags, memory, pc):
         total = regs[cell[1]] + delta
         result = total & MASK
         regs[cell[1]] = result
-        flags["C"] = 1 if (total > MASK or total < 0) else 0
+        # INC/DEC 不碰 C（跟 x86 一致：进位链之外的加减法不报告进位）；Z/N/V 照旧
         # INC 从 0x7FFF 翻到 0x8000、DEC 从 0x8000 翻到 0x7FFF 就是有符号溢出
         flags["V"] = 1 if result == (0x8000 if op == "INC" else 0x7FFF) else 0
         flags["Z"] = 1 if result == 0 else 0
@@ -403,7 +419,10 @@ def asm_sim(source: str = "", path: str = "", max_steps: int = DEFAULT_MAX_STEPS
                 source = handle.read()
         except OSError as exc:
             return f"错误：读不了 {path}（{exc}）"
-    if not (source or "").strip():
+    if not isinstance(source, str):
+        # 传进来非字符串时本来会 AttributeError 冒泡出去，这里给个能看懂的说法
+        return f"错误：source 要是字符串，现在拿到的是 {type(source).__name__}；也可以改用 path 指一个 .asm 文件"
+    if not source.strip():
         return "错误：没给汇编源码，往 source 里传（或者用 path 指一个 .asm 文件）"
 
     try:
@@ -437,7 +456,8 @@ def asm_sim(source: str = "", path: str = "", max_steps: int = DEFAULT_MAX_STEPS
 
     while True:
         if steps >= max_steps:
-            stopped = f"达到步数上限 {max_steps} 就停了（多半是死循环，检查一下跳转条件）"
+            stopped = (f"达到步数上限 {max_steps} 就停了（要么是死循环，检查一下跳转条件；"
+                       f"要么程序本来就长，把 max_steps 调大再跑）")
             break
         if not 0 <= pc < MEM_SIZE:
             stopped = f"PC 跑飞了（0x{pc & MASK:04X}），程序没写 HALT 结尾吧"
@@ -457,7 +477,12 @@ def asm_sim(source: str = "", path: str = "", max_steps: int = DEFAULT_MAX_STEPS
 
         before = list(regs) if trace else None
         here = pc
-        pc = _step(cell, regs, flags, memory, pc)
+        try:
+            pc = _step(cell, regs, flags, memory, pc)
+        except ValueError as exc:
+            # 地址越界之类的运行时错误：停下来把原因报出去，别让异常冒泡出工具
+            stopped = f"运行出错：{exc}"
+            break
         steps += 1
 
         if trace and len(trace_lines) < MAX_TRACE:

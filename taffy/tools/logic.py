@@ -30,7 +30,7 @@ SPECS = [
                 "'#' 或 ';' 后面是注释。门型有 AND / OR / NOT / NAND / NOR / XOR / XNOR / BUF / DFF。"
                 "AND/OR/NAND/NOR/XOR 可以给多个输入（两个以上都行），NOT/BUF/DFF 只收一个输入。"
                 "DFF 就是 D 触发器，输出在时钟上升沿才更新。\n"
-                "不给 inputs 时：把所有输入端口的所有组合跑一遍列成真值表（纯组合电路，最多 8 个输入）。"
+                "不给 inputs 时：把所有输入端口的所有组合跑一遍列成真值表（纯组合电路，最多 6 个输入）。"
                 "给了 inputs 时：按给定值算一遍所有节点的值；如果网表里有 DFF，就按时钟跑 cycles 个周期"
                 "（inputs 里可以给 '0101' 这样的序列来驱动，短的会保持最后一拍）。"
                 "有时钟端口（名字叫 CLK）时在上升沿采样，没有就每个周期都采样。"
@@ -175,7 +175,12 @@ def _sequence(value, cycles: int, name: str) -> list:
             raise ValueError(f"输入 {name} 的序列是空的")
         return [digits[min(i, len(digits) - 1)] for i in range(cycles)]
     if isinstance(value, str):
-        digits = [int(char) for char in value.strip() if char in "01"]
+        digits = []
+        for char in value.strip():
+            # 跟列表风格保持一致：非 0/1 的字符要报错，别悄悄丢掉（"12" 当成 1 会看不出错）
+            if char not in "01":
+                raise ValueError(f"输入 {name} 的序列里只能有 0 和 1，这里出现了 {char!r}")
+            digits.append(int(char))
         if not digits:
             raise ValueError(f"输入 {name} 给的是 {value!r}，里面没有 0/1")
         return [digits[min(i, len(digits) - 1)] for i in range(cycles)]
@@ -301,6 +306,9 @@ def _single(inputs, nodes, dffs, given: dict) -> str:
 
 def logic_sim(netlist: str = "", inputs: dict = None, cycles: int = 8) -> str:
     """门级网表仿真：给输入算结果，或者列真值表。"""
+    if not isinstance(netlist, str):
+        # 非字符串本来会在 splitlines 上炸出 AttributeError，这里给个能看懂的说法
+        return f"网表有问题：netlist 要是字符串，现在拿到的是 {type(netlist).__name__}"
     try:
         ports, nodes, dffs = _parse(netlist)
     except ValueError as exc:
@@ -315,10 +323,17 @@ def logic_sim(netlist: str = "", inputs: dict = None, cycles: int = 8) -> str:
     except (TypeError, ValueError):
         cycles = 8
 
-    if dffs:
+    try:
+        if dffs:
+            if not given:
+                return _truth_table(ports, nodes, dffs)
+            return _simulate(ports, nodes, dffs, given, cycles)
         if not given:
             return _truth_table(ports, nodes, dffs)
-        return _simulate(ports, nodes, dffs, given, cycles)
-    if not given:
-        return _truth_table(ports, nodes, dffs)
-    return _single(ports, nodes, dffs, given)
+        return _single(ports, nodes, dffs, given)
+    except RecursionError:
+        # 求值是递归的，链太深（几千级）时 Python 会抛 RecursionError；
+        # 这不是电路本身的错，转成看得懂的说法，别让异常冒泡出工具
+        return ("网表有问题：电路太深了，递归求值的时候超过了 Python 的递归层数"
+                "（常见于上千级的门链，或者定义顺序是「用到在前、定义在后」的深链）。"
+                "建议拆成几段中间节点，或者把定义顺序改成从输入往输出写")

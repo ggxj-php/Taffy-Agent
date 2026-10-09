@@ -100,15 +100,34 @@ def _uart(args: dict) -> str:
     usartdiv = f_cpu / (over * baud)
     integer = int(usartdiv)
     fraction = usartdiv - integer
-    # OVER16：BRR 的整数部分在 bit15:4、小数 4 位在 bit3:0；
-    # OVER8：小数只有 1 位，而且放在 bit3（不是 bit0）——放错了 BRR 就整个不对
-    frac_bits = 4 if over == 16 else 1
-    frac_shift = 0 if over == 16 else 3
-    frac_code = round(fraction * (1 << frac_bits))
+    # OVER16：BRR 的整数部分在 bit15:4、小数 4 位在 bit3:0（1 格 = 1/16）；
+    # OVER8：小数只有 3 位、落在 BRR[2:0]（1 格 = 1/8，BRR[3] 要留 0），所以两种模式下
+    # 小数都在 BRR 的低位，不用再移位。依据 STM32 HAL（stm32f4xx_hal_uart.h /
+    # stm32f1xx_hal_uart.h）的宏：
+    #   UART_DIVFRAQ_SAMPLING16 = ((余数 * 16) + 50) / 100
+    #   UART_DIVFRAQ_SAMPLING8  = ((余数 *  8) + 50) / 100
+    #   UART_BRR_SAMPLING8      = (DIVMANT << 4) + ((FRAQ & 0xF8) << 1) + (FRAQ & 0x07)
+    # 也就是「小数按 1/8 取整、进位靠 (FRAQ & 0xF8) << 1 进到整数部分」；ST 的 LL 库
+    # （__LL_USART_DIV_SAMPLING8）和 Linux 的 stm32-usart.c（f_cpu/baud 四舍五入后
+    # 低 3 位当小数）也是这个口径。
+    frac_bits = 4 if over == 16 else 3
+    # HAL 用 ((x * 16) + 50) / 100 这种整数写法做四舍五入（半进位），数学上就是 floor(x + 0.5)；
+    # 而 Python 的 round() 是银行家舍入，小数正好卡在 .5 时会往偶数靠（round(6.5) == 6），
+    # 比 HAL 少一格，所以这里自己算 floor(x + 0.5)。
+    frac_code = int(math.floor(fraction * (1 << frac_bits) + 0.5))
     if frac_code >= (1 << frac_bits):        # 小数进位到整数
         integer += 1
         frac_code = 0
-    brr = (integer << 4) | (frac_code << frac_shift)
+    brr = (integer << 4) | frac_code
+
+    # BRR 只有 16 位：OVER16 最大 0xFFF.F（4095.9375，BRR = 0xFFFF），OVER8 最大 0xFFF.8（4095.5）。
+    # 波特率相对主频太低时 USARTDIV 会超出去，这时候必须报错——直接给一个 0x3A980 这样的
+    # 「寄存器值」会让人以为写进去就行，其实低 16 位以外的位根本没地方放。
+    if brr > 0xFFFF:
+        max_div = 4095 + (15 / 16 if over == 16 else 1 / 2)
+        return (f"USARTDIV = {usartdiv:.4f} 太大：算出来的 BRR = 0x{brr:X} 超过 16 位寄存器的上限"
+                f"（OVER{int(over)} 最多到 {_fmt(max_div, '', 4)}，即 BRR = 0xFFFF）。"
+                "这个波特率相对主频太低了，分频比装不进 BRR：提高 f_cpu，或者别用这么低的波特率")
 
     # 实际波特率要按 BRR 里那份「整数 + 小数」的分频算，不能把小数丢掉再用整数凑
     actual_div = integer + frac_code / (1 << frac_bits)
@@ -202,10 +221,16 @@ def _adc(args: dict) -> str:
              f"满量程码值：0 ~ {levels - 1}（{levels} 个台阶）",
              f"1 LSB = {_fmt(lsb, 'V', 6)} = {_fmt(lsb * 1e6, 'uV', 2)}"]
     if value is not None:
+        if value < 0:        # 原始码值是无符号的，负码值只会算出没意义的电压
+            return (f"码值 {_fmt(value)} 是负数：ADC 的原始码值是无符号数，范围 0 ~ {levels - 1}，"
+                    "负电压要先加偏置电路抬进量程再读")
         lines.append(f"码值 {_fmt(value)} → 电压 {_fmt(value * lsb, 'V', 6)}")
         if value >= levels:
             lines.append("⚠ 码值超出了量程上限，实际读到的是钳位值")
     elif voltage is not None:
+        if voltage < 0:      # 量程是 0~Vref，负电压反推出来的码值也是负的，别输出「0x-26D」这种垃圾
+            return (f"电压 {_fmt(voltage, 'V')} 是负数：ADC 只能量 0 ~ Vref（这里是 0 ~ {_fmt(vref, 'V')}）"
+                    "之间的电压，负电压得先用偏置电路或差分输入抬到正区间")
         code = round(voltage / lsb)
         lines.append(f"电压 {_fmt(voltage, 'V')} → 码值 {code}（0x{code:0{max(2, bits // 4)}X}）")
         if code > levels - 1:
@@ -234,6 +259,9 @@ def _divider(args: dict) -> str:
 
     if vout is None:
         return "divider 要给 r2（算 Vout）或 vout（反推 R2）"
+    if vout < 0:        # 电阻分压只能把电压往下拉，负的 Vout 解出来是个负电阻，没意义
+        return (f"Vout = {_fmt(vout, 'V')} 是负数：电阻分压只能输出 0 ~ Vin（这里 {_fmt(vin, 'V')}）"
+                "之间的电压，要负压得用双电源或者反相放大")
     if vout >= vin:
         return f"Vout 要高到 {_fmt(vout, 'V')}，但 Vin 只有 {_fmt(vin, 'V')}：分压不可能升压，得换方案"
     solved = r1 * vout / (vin - vout)
@@ -259,6 +287,9 @@ def _pwm(args: dict) -> str:
     lines = [f"PWM 频率 = f_cpu/(prescaler×(ARR+1)) = {_fmt(freq, 'Hz', 4)}"
              f"（周期 {_fmt(1 / freq * 1e6, 'us', 4)}）"]
     if ccr is not None:
+        if ccr < 0:      # 比较值是从 0 往上的，负 CCR 只会算出负占空比和负的高电平时间
+            return (f"CCR = {_fmt(ccr)} 是负数：比较值范围是 0 ~ ARR+1（这里 0 ~ {_fmt(top)}），"
+                    "占空比只能是 0~100%")
         duty = ccr / top * 100
         lines.append(f"CCR={_fmt(ccr)} → 占空比 {duty:.3f}%")
         lines.append(f"高电平时间 {_fmt(ccr / top / freq * 1e6, 'us', 4)}，"

@@ -249,9 +249,14 @@ def diff_text(a: str = "", b: str = "", context: int = 3) -> str:
         if a != b:      # 行内内容一样，差的只是行尾换行之类
             same += "（只有末尾换行 / 行尾这些细节不一样）"
         return same
-    # 先把完整差异统计完再截断，不然被截掉的那截新增 / 删除就不算数了
-    added = sum(1 for line in full if line.startswith("+") and not line.startswith("+++"))
-    removed = sum(1 for line in full if line.startswith("-") and not line.startswith("---"))
+    # 先把完整差异统计完再截断，不然被截掉的那截新增 / 删除就不算数了。
+    # 这里只跳过 unified_diff 固定输出的前两行文件头（"--- 旧" / "+++ 新"）：
+    # 不能用 startswith("+++") / ("---") 去排，因为内容本身以 ++ / -- 开头的行
+    # 加上 diff 的 "+" / "-" 前缀之后正好也是 "+++…" / "---…"，会被一起当成文件头丢掉。
+    # （实测 a="a\n" → b="a\n++i;\n" 会被统计成「新增 0 行」。）
+    body = full[2:] if len(full) >= 2 and full[0].startswith("--- ") and full[1].startswith("+++ ") else full
+    added = sum(1 for line in body if line.startswith("+"))
+    removed = sum(1 for line in body if line.startswith("-"))
     diff = full
     if len(diff) > MAX_LINES:
         diff = diff[:MAX_LINES]
@@ -358,8 +363,27 @@ def json_tool(data: str = "", op: str = "format", path: str = "", indent: int = 
         return "得给我一段 JSON 呀喵"
     if len(data) > MAX_TEXT:
         return f"JSON 太长了（{len(data)} 字符，最多 {MAX_TEXT}）"
+    def _reject_constant(name):
+        # 标准 JSON（RFC 8259）里根本没有 NaN / Infinity / -Infinity 这三个字面量，
+        # Python 的 json 却默认照收；收下之后再 dumps 出来还是 NaN / Infinity，
+        # 等于把非标准 JSON 原样吐回给用户（浏览器 JSON.parse / Go / Java 的严格解析器都会拒收）。
+        # 直接抛 JSONDecodeError，好复用 _json_error 的行列 + caret 展示。
+        raise json.JSONDecodeError(
+            f"{name} 不是标准 JSON 的写法（标准里没有这个字面量：空值写 null，"
+            f"大数写普通数字或字符串）", data, max(data.find(name), 0))
+
+    def _reject_float(text_value):
+        # 1e999 这种写法合法但超出双精度的数字，Python 解析出来是 inf，
+        # 一 dumps 又变成非标准的 Infinity，所以一并拦掉。
+        number = float(text_value)
+        if number in (float("inf"), float("-inf")):
+            raise json.JSONDecodeError(
+                f"{text_value} 超出双精度浮点的范围，解析出来会是 Infinity（非标准 JSON）",
+                data, max(data.find(text_value), 0))
+        return number
+
     try:
-        obj = json.loads(data)
+        obj = json.loads(data, parse_constant=_reject_constant, parse_float=_reject_float)
     except json.JSONDecodeError as e:
         return _json_error(data, e)
 

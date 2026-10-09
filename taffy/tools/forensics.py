@@ -111,7 +111,8 @@ _SIGNATURES = (
     (b"\x7fELF", "Linux 可执行文件（ELF）", ""),
     (b"Rar!\x1a\x07", "RAR 压缩包", ".rar"),
     (b"7z\xbc\xaf\x27\x1c", "7-Zip 压缩包", ".7z"),
-    (b"PK\x03\x04", "ZIP 容器（也可能是 docx / xlsx / jar / apk）", ".zip"),
+    (b"PK\x03\x04", "ZIP 容器（docx / xlsx / pptx / jar / apk 这些本质都是 ZIP 包装）",
+     ".zip/.docx/.xlsx/.pptx/.jar/.apk/.odt/.ods/.odp/.epub/.whl"),
     (b"PK\x05\x06", "ZIP 空包（只有目录）", ".zip"),
     (b"\xff\xd8\xff", "JPEG 图片", ".jpg"),
     (b"GIF87a", "GIF 图片", ".gif"),
@@ -127,11 +128,27 @@ _SIGNATURES = (
     (b"BM", "BMP 位图", ".bmp"),
 )
 
+# 纯文本认不出更细的类型，拿扩展名兜底：这些都是「文本」，内容确实是文本时不该报改后缀伪装。
+# （以前这里只有 .txt，于是 .py/.md/.json/.log/.csv/... 全被误报成伪装。）
+_TEXT_EXTS = (
+    "txt", "text", "md", "markdown", "rst", "json", "jsonl", "ndjson", "log", "csv", "tsv",
+    "html", "htm", "xhtml", "xml", "xsl", "svg", "yaml", "yml", "ini", "cfg", "conf", "config",
+    "toml", "properties", "env", "c", "h", "cpp", "cxx", "cc", "hpp", "hh", "cs", "java",
+    "js", "mjs", "cjs", "jsx", "ts", "tsx", "py", "pyw", "pyi", "sh", "bash", "zsh", "bat",
+    "cmd", "ps1", "psm1", "sql", "css", "scss", "less", "tex", "go", "rs", "rb", "php", "pl",
+    "lua", "swift", "kt", "kts", "gradle", "dart", "r", "m", "vb", "vbs", "asm", "s", "diff",
+    "patch", "rtf", "srt", "vtt", "pem", "crt", "key", "gitignore", "editorconfig",
+)
+
+# 这些扩展名本身就是 ZIP 容器（OOXML / OpenDocument / JAR 之类），
+# 内容识别成 ZIP 是正常的，不该报「改后缀伪装」，给一句说明就行。
+_ZIP_BASED = frozenset(("docx", "xlsx", "pptx", "jar", "apk", "odt", "ods", "odp", "epub", "whl"))
+
 # 雕复签名：(扩展名, 头, 尾)。尾为 None 的格式没有可靠结束标记，按 _MAX_CARVE_SIZE 截。
 _CARVE_SIGNATURES = (
     ("jpg", b"\xff\xd8\xff", b"\xff\xd9"),
     ("png", b"\x89PNG\r\n\x1a\n", b"IEND\xaeB`\x82"),
-    ("gif", b"GIF89a", b"\x3b"),                 # GIF 真尾标记就是单个 0x3B
+    ("gif", b"GIF89a", b"\x3b"),                 # 尾标记是单字节 0x3B，但数据里到处都是，取法见 _gif_trailer
     ("pdf", b"%PDF", b"%%EOF"),
     ("zip", b"PK\x03\x04", b"PK\x05\x06"),       # 用中央目录结束记录当结尾，别整包 8MB
 )
@@ -197,20 +214,43 @@ def _entropy(data):
     for byte in sample:
         counts[byte] = counts.get(byte, 0) + 1
     total = len(sample)
-    return -sum((c / total) * math.log2(c / total) for c in counts.values())
+    # 单符号（比如全 0 的文件）时每项都是 1.0 * log2(1.0) = 0.0，整体取负号会得到 IEEE 负零，
+    # 再按 "%.2f" 格式化就成了很难看的「-0.00」。加 0.0 按 IEEE 规则把 -0.0 规范成 +0.0。
+    return -sum((c / total) * math.log2(c / total) for c in counts.values()) + 0.0
+
+
+def _looks_like_bmp(data):
+    """给只有两个字节的 "BM" 补个校验，免得 "BMI report 2024" 这种文本被当成位图。
+
+    BMP 文件头固定 14 字节：偏移 2..5 是小端文件大小，6..9 是保留位（规范要求 0），
+    10..13 是像素数据起始偏移。大小字段明显和文件长度对不上，就说明不是 BMP。
+    """
+    if len(data) < 14:
+        return False
+    size = int.from_bytes(data[2:6], "little")
+    if int.from_bytes(data[6:10], "little") != 0:       # 保留位必须为 0
+        return False
+    if int.from_bytes(data[10:14], "little") < 14:      # 像素数据不可能落在文件头里面
+        return False
+    # 读到的是文件开头那一段：超过 _MAX_READ 的大文件会被截断，此时 size 比 len(data) 大也正常，
+    # 所以只在「没被截断却对不上」时才否决。size 为 0 是有些写入方干脆不填，放行。
+    return size == 0 or size <= len(data) or len(data) >= _MAX_READ
 
 
 def _identify(data):
     """按魔数猜类型，认不出来再看是不是纯文本。"""
     for magic, desc, ext in _SIGNATURES:
-        if data.startswith(magic):
-            return desc, ext
+        if not data.startswith(magic):
+            continue
+        if magic == b"BM" and not _looks_like_bmp(data):
+            continue        # 只是碰巧以 "BM" 开头，交给后面的文本判定
+        return desc, ext
     sample = data[:4096]
     if sample and b"\x00" not in sample:
         for encoding in ("utf-8", "gbk"):
             try:
                 sample.decode(encoding)
-                return f"纯文本（{encoding}）", ".txt"
+                return f"纯文本（{encoding}）", "/".join("." + e for e in _TEXT_EXTS)
             except UnicodeDecodeError:
                 continue
     return "未知格式", ""
@@ -229,13 +269,19 @@ def identify_file(path: str) -> str:
         f"实际类型：{desc}",
     ]
     if ext:
-        lines.append(f"这类文件常用扩展名：{ext}")
+        # 纯文本那串扩展名有几十个，全铺一行太吵：只列前几个，再把总数报出来
+        names = ext.split("/")
+        shown = "/".join(names) if len(names) <= 10 else "/".join(names[:9]) + f"/…（共 {len(names)} 种）"
+        lines.append(f"这类文件常用扩展名：{shown}")
 
     real_ext = os.path.splitext(path)[1].lower().lstrip(".")
     if real_ext and ext:
         allowed = [e.lstrip(".").lower() for e in ext.split("/")]
         if real_ext not in allowed:
             lines.append(f"⚠ 扩展名是 .{real_ext}，但内容其实是 {desc}——疑似改后缀伪装")
+        elif real_ext in _ZIP_BASED:
+            # docx / xlsx / jar 这些本来就是 ZIP 容器，识别成 ZIP 属于正常，说明一句就行
+            lines.append(f"说明：.{real_ext} 本质就是 ZIP 容器（里面是 XML / 资源部件），扩展名和内容相符，不是伪装")
 
     note = "加密 / 压缩 / 打包过" if entropy > 7.5 else ("基本是明文" if entropy < 5.5 else "普通二进制数据")
     lines.append(f"熵值：{entropy:.2f} / 8（采样前 {_ENTROPY_SAMPLE // 1024}KB，{note}）")
@@ -286,6 +332,44 @@ def extract_strings(path: str, min_len: int = 4, keyword: str = "", limit: int =
     return "\n".join(lines)
 
 
+def _gif_trailer(data, begin):
+    """按 GIF 的块结构往后走，返回真正的 trailer（0x3B）的下标；找不到返回 -1。
+
+    GIF 的 LZW 压缩数据、注释 / 应用扩展块里 0x3B 都很常见，直接 find 取第一个会把图切短
+    （实测 60 字节的 GIF 只写出 29 字节）。老老实实一块一块跳过去，跳到的那个 0x3B 才算数；
+    结构走不通（截断 / 损坏）时退回「取最后一个 0x3B」，也比取第一个强。
+    """
+    pos = begin + 6                     # 跳过 GIF87a / GIF89a
+    if pos + 7 > len(data):
+        return -1
+    packed = data[pos + 4]
+    pos += 7                            # Logical Screen Descriptor
+    if packed & 0x80:                   # 有全局调色板，整块跳过去
+        pos += 3 * (2 << (packed & 0x07))
+    while pos < len(data):
+        marker = data[pos]
+        if marker == 0x3B:              # Trailer：就是它
+            return pos
+        if marker == 0x21:              # 扩展块：0x21 + label，后面跟子块链
+            pos += 2
+        elif marker == 0x2C:            # 图像描述符：固定 10 字节
+            if pos + 10 > len(data):
+                break
+            local = data[pos + 9]
+            pos += 10
+            if local & 0x80:            # 局部调色板
+                pos += 3 * (2 << (local & 0x07))
+            pos += 1                    # LZW 最小码长
+        else:
+            break
+        while pos < len(data):                   # 子块链：[长度][数据]，长度 0 那个块就是链尾
+            length = data[pos]
+            pos += 1 + length
+            if not length:
+                break
+    return data.rfind(b"\x3b", begin + 6)
+
+
 def carve_files(path: str, out_dir: str = "carved", max_files: int = 50) -> str:
     """按文件头尾签名雕复出内嵌文件，写到 workspace 下的 out_dir。"""
     max_files = max(1, int(max_files))
@@ -303,7 +387,9 @@ def carve_files(path: str, out_dir: str = "carved", max_files: int = 50) -> str:
                 break
             start = begin + 1
             if tail:
-                stop = data.find(tail, begin + len(head))
+                # GIF 的尾标记是单字节 0x3B 且数据里遍地都是，得按结构找真正的 trailer；
+                # 其余格式（PNG 的 IEND、JPEG 的 FFD9）取第一个就是对的，别动。
+                stop = _gif_trailer(data, begin) if ext == "gif" else data.find(tail, begin + len(head))
                 if stop < 0:
                     continue
                 stop += len(tail)
